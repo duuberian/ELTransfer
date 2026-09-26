@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="canonical" href="https://duuberian.com/eltransfer/about.html" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fff0df" />
+    <meta name="description" content="Privacy, security details, developer information, and support for the ELTransfer prototype." />
+    <meta property="og:title" content="ELTransfer — Privacy, security &amp; support" />
+    <meta property="og:description" content="What the pointer prototype sends, what it stores, and where to get help." />
+    <link rel="icon" href="assets/eltransfer-logo.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700;750;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css?v=4" />
+    <title>ELTransfer — Privacy, security &amp; support</title>
+  </head>
+  <body class="about-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="about-header wrap">
+      <a class="brand" href="index.html" aria-label="ELTransfer home"><span class="app-icon app-icon-small"><img src="assets/eltransfer-logo.svg" alt="" width="1024" height="1024" /></span>ELTransfer</a>
+      <a class="button button-soft" href="index.html">← Back to ELTransfer</a>
+    </header>
+    <main id="main">
+      <section class="trust-section section wrap" aria-labelledby="trust-title">
+        <h1 class="section-title" id="trust-title">Privacy, security &amp; support.</h1>
+        <nav class="about-navigation" aria-label="On this page"><a href="#privacy-policy">Privacy</a> <a href="#security">Security details</a> <a href="#support">Developer &amp; support</a></nav>
+        <div class="trust-grid">
+          <article id="security">
+            <p class="eyebrow">SECURITY DETAILS</p>
+            <h2>A pointer position. That’s the whole payload.</h2>
+            <p>The sender transmits a small JSON message over UDP on port 47000: a normalized x and y, the sender’s screen size, and an active flag. No screen contents, keystrokes, clipboard, or file data are ever read or sent.</p>
+            <p>The receiver draws a borderless, click-through overlay window. It ignores mouse events and cannot inject input, so it cannot move, click, or type on your Mac.</p>
+            <p>Accessibility and Input Monitoring permissions let the app read the cursor position and detect the <kbd>⌘</kbd> key globally. This prototype is not signed or notarized, and packets are not authenticated or encrypted. Use it only on networks you trust.</p>
+            <a href="index.html#launch-faq">Read the first-launch guidance ↗</a>
+          </article>
+          <article id="support">
+            <p class="eyebrow">DEVELOPER &amp; SUPPORT</p>
+            <h2>A small, independent experiment.</h2>
+            <p>ELTransfer is made by <a href="https://github.com/duuberian">duuberian</a>. It is an early prototype shared to test one interaction, and feedback shapes what happens next.</p>
+            <p>Found a bug, or want to suggest how the pointer should feel? Open an issue and include your macOS version, both Macs’ models, and what happened.</p>
+            <p>GitHub reports are public. Leave out private network details.</p>
+            <a href="https://github.com/duuberian">Get support or share feedback ↗</a>
+          </article>
+        </div>
+        <article class="policy" id="privacy-policy" aria-labelledby="policy-title">
+          <p class="eyebrow">PRIVACY · UPDATED 26 SEPTEMBER 2026</p>
+          <h2 id="policy-title">What stays here. What gets sent.</h2>
+          <dl>
+            <div><dt>On your Mac</dt><dd>The app stores no preferences, history, or pairing state. Diagnostic lines about connection state are printed to the system log while the app runs and are not sent anywhere.</dd></div>
+            <div><dt>On your network</dt><dd>While the sender holds <kbd>⌘</kbd> at a screen edge, it sends cursor positions to <code>ELTransfer.local</code> on your local network. The receiver listens on the same port. Other devices on the network could observe these packets; they contain only coordinates.</dd></div>
+            <div><dt>Internet</dt><dd>The app makes no internet connections. There is no update check, no analytics, and no account.</dd></div>
+            <div><dt>This website</dt><dd>The demo runs entirely in your browser and sends nothing. The page has no analytics scripts or advertising trackers. It loads its font from Google Fonts, which receives a normal web request including your IP address and may keep service logs.</dd></div>
+            <div><dt>Questions</dt><dd>Use the public support link above. Information you include in a public report is visible to others, so leave out sensitive details.</dd></div>
+          </dl>
+        </article>
+      </section>
+    </main>
+    <footer class="wrap">
+      <a class="brand" href="index.html" aria-label="ELTransfer home">ELTransfer <span class="version">v0.1</span></a>
+      <p>A pointer that visits. Never one that stays.</p>
+      <span>© 2026 EL</span>
+      <nav class="footer-links" aria-label="Footer navigation"><a href="index.html">← Back to ELTransfer</a> <a href="https://github.com/duuberian">Get support ↗</a></nav>
+    </footer>
+  </body>
+</html>

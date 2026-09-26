@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="840" viewBox="0 0 1440 840" fill="none">
+  <defs>
+    <linearGradient id="sky" x1="720" y1="0" x2="720" y2="840" gradientUnits="userSpaceOnUse"><stop stop-color="#f6d3b3"/><stop offset=".5" stop-color="#e6b9a6"/><stop offset="1" stop-color="#6d6f9a"/></linearGradient>
+    <linearGradient id="far" x1="1000" y1="300" x2="600" y2="800" gradientUnits="userSpaceOnUse"><stop stop-color="#8b7fa8"/><stop offset="1" stop-color="#3d3f6b"/></linearGradient>
+    <linearGradient id="mid" x1="300" y1="380" x2="700" y2="840" gradientUnits="userSpaceOnUse"><stop stop-color="#5b6c98"/><stop offset="1" stop-color="#2c3459"/></linearGradient>
+    <linearGradient id="near" x1="100" y1="600" x2="600" y2="960" gradientUnits="userSpaceOnUse"><stop stop-color="#2a3352"/><stop offset="1" stop-color="#171c33"/></linearGradient>
+    <radialGradient id="sun"><stop stop-color="#fff0d2" stop-opacity=".95"/><stop offset=".35" stop-color="#ffd9a8" stop-opacity=".55"/><stop offset="1" stop-color="#ffd9a8" stop-opacity="0"/></radialGradient>
+  </defs>
+  <path fill="url(#sky)" d="M0 0h1440v840H0z"/>
+  <circle cx="1000" cy="330" r="300" fill="url(#sun)"/>
+  <circle cx="1000" cy="330" r="74" fill="#fff4dc"/>
+  <path d="M0 470C190 430 330 500 520 450 720 398 860 470 1040 420 1230 367 1300 320 1440 340V840H0Z" fill="url(#far)"/>
+  <path d="M0 560C150 520 300 610 480 590 660 570 780 500 960 540 1150 582 1280 660 1440 640V840H0Z" fill="url(#mid)"/>
+  <path d="M0 690C200 650 360 720 560 700 760 680 900 640 1100 680 1260 712 1360 740 1440 730V840H0Z" fill="url(#near)"/>
+  <path d="M0 560C150 520 300 610 480 590 660 570 780 500 960 540" stroke="#ffd4b8" stroke-opacity=".35" stroke-width="2"/>
+</svg>

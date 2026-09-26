@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="canonical" href="https://duuberian.com/eltransfer/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#fff0df" />
+    <meta
+      name="description"
+      content="ELTransfer shows where your cursor is on another Mac nearby. A pointer ghost, not a remote control. Local network only, consent on both sides."
+    />
+    <meta property="og:title" content="ELTransfer — Two Macs. One pointer." />
+    <meta
+      property="og:description"
+      content="A small macOS prototype that shows a sender’s cursor position on a second Mac. No clicks, no typing, no cloud."
+    />
+    <link rel="icon" href="assets/eltransfer-logo.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700;750;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="preload" href="assets/desk-wallpaper.svg" as="image" />
+    <link rel="stylesheet" href="styles.css?v=4" />
+    <title>ELTransfer — Two Macs. One pointer.</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6" /></symbol>
+        <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5" /></symbol>
+        <symbol id="i-command" viewBox="0 0 24 24"><path d="M9 9V6a3 3 0 1 0-3 3h3Zm0 0v6m0-6h6m0 0V6a3 3 0 1 1 3 3h-3Zm0 0v6m0 0h3a3 3 0 1 1-3 3v-3Zm0 0H9m0 0v3a3 3 0 1 1-3-3h3Z" /></symbol>
+        <symbol id="i-pointer" viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-3 6-5-16Z" /></symbol>
+        <symbol id="i-ghost" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3.5" /></symbol>
+        <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></symbol>
+        <symbol id="i-mac" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2" /><path d="M8 21h8m-4-5v5" /></symbol>
+        <symbol id="i-both" viewBox="0 0 24 24"><rect x="2.5" y="5" width="9" height="12" rx="1.5" /><rect x="12.5" y="5" width="9" height="12" rx="1.5" /><path d="M5 20h5m4 0h5" /></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
+        <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 3h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-9l-5 4v-4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" /><path d="M7 8h10M7 12h6" /></symbol>
+        <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z" /></symbol>
+        <symbol id="i-house" viewBox="0 0 24 24"><path d="m3 11 9-7 9 7v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9Z" /><path d="M9 21v-6h6v6" /></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5-12-7.5Z" /></symbol>
+        <symbol id="i-hand" viewBox="0 0 24 24"><path d="M8 13V5.5a1.5 1.5 0 0 1 3 0V12m0-7.5a1.5 1.5 0 0 1 3 0V12m0-5.5a1.5 1.5 0 0 1 3 0V13m0-3a1.5 1.5 0 0 1 3 0v4a7 7 0 0 1-7 7h-1.5a6 6 0 0 1-5-2.7L4 13.5a1.6 1.6 0 0 1 2.7-1.7L8 13" /></symbol>
+        <symbol id="i-edge" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M21 8v6M13 11h5m-2-2 2 2-2 2" /></symbol>
+      </defs>
+    </svg>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="ELTransfer home"><span class="app-icon app-icon-small"><img src="assets/eltransfer-logo.svg" alt="" width="1024" height="1024" /></span>ELTransfer <span class="version" data-app-version>v0.1</span></a>
+      <nav id="main-nav" aria-label="Main navigation">
+        <a href="#demo"><svg class="icon" aria-hidden="true"><use href="#i-spark" /></svg>Demo</a>
+        <a href="#how"><svg class="icon" aria-hidden="true"><use href="#i-both" /></svg>Features</a>
+        <a href="#faq"><svg class="icon" aria-hidden="true"><use href="#i-chat" /></svg>FAQs</a>
+        <a class="button button-soft header-download" href="downloads/ELTransfer.dmg" download><svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Download for Mac</a>
+      </nav>
+      <button class="menu-button" type="button" aria-label="Open menu" aria-controls="main-nav" aria-expanded="false"><span></span><span></span></button>
+    </header>
+
+    <main id="main">
+      <section class="hero wrap" id="top">
+        <svg class="notebook-doodle hero-screens" viewBox="0 0 120 80" aria-hidden="true" focusable="false">
+          <rect x="4" y="14" width="44" height="30" rx="4" />
+          <rect x="72" y="26" width="44" height="30" rx="4" />
+          <path class="pencil-echo" d="M8 18h36M76 30h36" />
+          <path d="M20 50h12M88 62h12" />
+          <path class="doodle-arc" d="M40 30c14-18 34-14 44 4" />
+          <path d="m80 28 4 6-7 .5" />
+          <circle cx="98" cy="42" r="4" />
+        </svg>
+        <p class="hero-overline"><span class="status-dot"></span> Two Macs. One little pointer ghost.</p>
+        <h1>Two Macs.<br /> One <span class="marker">pointer.</span></h1>
+        <p class="hero-intro">
+          Hold <kbd>⌘</kbd>, slide your cursor to the edge of one Mac,<br /> and a quiet blue ghost appears on the other.
+          Nothing is clicked. Nothing is controlled.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="downloads/ELTransfer.dmg" download><svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Download for Mac</a>
+          <a class="button button-soft" href="#demo">See the ghost cross over<svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg></a>
+        </div>
+        <p class="compatibility">
+          macOS 13+ <span>·</span> Apple silicon <span>·</span> <span data-download-size>0.3 MB</span> <span>·</span> Prototype <span data-app-version>v0.1</span>
+        </p>
+        <p class="trust-links"><a href="about.html#privacy-policy">Privacy</a> · <a href="about.html#security">Security details</a> · <a href="about.html#support">Developer &amp; support</a></p>
+      </section>
+
+      <section class="demo-section wrap" id="demo" aria-label="Interactive ELTransfer demonstration">
+        <div class="demo-margin-note" aria-hidden="true">
+          <span>try it!</span>
+          <svg class="notebook-doodle" viewBox="0 0 112 72" focusable="false"><path d="M99 8c-6 25-39 31-51 16-10-14 9-23 15-9 8 19-18 42-48 40M26 45 13 55l15 8" /></svg>
+        </div>
+
+        <div class="desk" id="desk" data-sender="released" data-receiver="released" data-link="idle">
+          <div class="desk-macs">
+            <figure class="mac sender" id="sender-mac">
+              <div class="mac-screen" id="sender-screen">
+                <div class="mac-menubar">
+                  <span class="mac-app"><strong>ELTransfer</strong><span class="mac-status" aria-hidden="true">↔</span></span>
+                  <span class="mac-system"><svg class="icon" aria-hidden="true"><use href="#i-command" /></svg><span class="consent-pill" id="sender-pill">⌘ released</span><time class="mac-clock" aria-label="Local time"></time></span>
+                </div>
+                <div class="edge-zone" aria-hidden="true"></div>
+                <div class="mac-canvas" id="sender-canvas">
+                  <svg class="mac-cursor" id="sender-cursor" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 8-6 2-3 6-5-16Z" /></svg>
+                  <p class="mac-hint" id="sender-hint">Hold <kbd>⌘</kbd> and move toward an edge</p>
+                </div>
+              </div>
+              <figcaption><strong>Sender</strong><span>Your cursor lives here</span></figcaption>
+            </figure>
+
+            <div class="link" aria-hidden="true">
+              <svg class="link-wire" viewBox="0 0 120 40" preserveAspectRatio="none"><path d="M2 20h116" /></svg>
+              <span class="packet" id="packet"></span>
+              <span class="link-label" id="link-label">UDP · local network</span>
+              <code class="link-readout" id="link-readout">x 0.28 · y 0.44</code>
+            </div>
+
+            <figure class="mac receiver" id="receiver-mac">
+              <div class="mac-screen" id="receiver-screen">
+                <div class="mac-menubar">
+                  <span class="mac-app"><strong>ELTransfer</strong><span class="mac-status" aria-hidden="true">↔</span></span>
+                  <span class="mac-system"><svg class="icon" aria-hidden="true"><use href="#i-command" /></svg><span class="consent-pill" id="receiver-pill">⌘ released</span><time class="mac-clock" aria-label="Local time"></time></span>
+                </div>
+                <div class="mac-canvas">
+                  <span class="ghost" id="receiver-ghost"><span></span></span>
+                  <p class="mac-hint" id="receiver-hint">Waiting for a pointer</p>
+                </div>
+              </div>
+              <figcaption><strong>Receiver</strong><span>Shows the matching spot</span></figcaption>
+            </figure>
+          </div>
+          <p class="desk-caption"><span class="status-dot"></span><span id="demo-caption">Both Macs are idle. Hold ⌘ on each to begin.</span></p>
+        </div>
+
+        <div class="demo-controls">
+          <p>Consent is a key, not a setting. Toggle it on each Mac, or hold the real <kbd>⌘</kbd> key.</p>
+          <div class="consent-group" role="group" aria-label="Demo consent controls">
+            <button type="button" class="consent-toggle" data-side="sender" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-command" /></svg><span>Hold ⌘ on Sender</span></button>
+            <button type="button" class="consent-toggle" data-side="receiver" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-command" /></svg><span>Hold ⌘ on Receiver</span></button>
+            <button type="button" class="consent-toggle play" id="demo-play"><svg class="icon" aria-hidden="true"><use href="#i-play" /></svg><span>Play the whole thing</span></button>
+          </div>
+          <p class="demo-disclaimer">Just a demo. No packets leave this page.</p>
+        </div>
+        <p class="sr-only" role="status" aria-live="polite" id="demo-status"></p>
+        <noscript><p class="noscript-note">This is an illustrative preview. Enable JavaScript to move the pointer; downloads and FAQs work without it.</p></noscript>
+      </section>
+
+      <section class="features wrap section" id="how">
+        <h2 class="section-title">A pointer hint.<br /> Not a <span class="drawn-underline">takeover.</span></h2>
+        <div class="feature-grid">
+          <article>
+            <svg class="feature-icon icon feature-ghost" viewBox="0 0 24 24" aria-hidden="true">
+              <circle class="ghost-ring" cx="12" cy="12" r="8" />
+              <circle class="ghost-core" cx="12" cy="12" r="3.5" />
+            </svg>
+            <h3>A visible<br /> pointer ghost.</h3>
+            <p>The receiver draws a soft blue ring at the sender’s position. It looks like presence, not possession.</p>
+          </article>
+          <article>
+            <svg class="feature-icon icon feature-command" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="cmd-shape" d="M9 9V6a3 3 0 1 0-3 3h3Zm0 0v6m0-6h6m0 0V6a3 3 0 1 1 3 3h-3Zm0 0v6m0 0h3a3 3 0 1 1-3 3v-3Zm0 0H9m0 0v3a3 3 0 1 1-3-3h3Z" />
+            </svg>
+            <h3>Consent on<br /> both sides.</h3>
+            <p>Each Mac holds <kbd>⌘</kbd>. Let go on either, and the session ends that instant.</p>
+          </article>
+          <article>
+            <svg class="feature-icon icon feature-lock" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="5" y="11" width="14" height="9" rx="2.5" />
+              <path class="lock-shackle" d="M8 11V8a4 4 0 0 1 8 0v3" />
+              <circle class="lock-dot icon-detail" cx="12" cy="15.5" r="1.2" fill="currentColor" stroke="none" />
+            </svg>
+            <h3>No remote<br /> control. Ever.</h3>
+            <p>The overlay ignores mouse events. It cannot click, type, drag, or scroll on the other Mac.</p>
+          </article>
+          <article>
+            <svg class="feature-icon icon feature-house" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m3 11 9-7 9 7v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9Z" />
+              <path class="house-door" pathLength="1" d="M9 21v-6h6v6" />
+              <path class="house-signal icon-detail" d="M15 7.5a3 3 0 0 1 3 0" />
+            </svg>
+            <h3>Stays on<br /> your network.</h3>
+            <p>One tiny UDP message travels across your local network. No account, no server, no cloud.</p>
+          </article>
+          <article>
+            <svg class="feature-icon icon feature-edge" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="14" rx="2" />
+              <path class="edge-glow" d="M21 8v6" />
+              <path class="edge-arrow" d="M12 11h5m-2-2 2 2-2 2" />
+            </svg>
+            <h3>Wakes at<br /> the edge.</h3>
+            <p>Positions only send within 24 pixels of a screen edge, so ordinary work never leaks across.</p>
+          </article>
+          <article>
+            <svg class="feature-icon icon feature-both" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="2.5" y="5" width="9" height="12" rx="1.5" />
+              <rect x="12.5" y="5" width="9" height="12" rx="1.5" />
+              <path d="M5 20h5m4 0h5" />
+              <circle class="both-dot icon-detail" cx="7" cy="11" r="1.4" fill="currentColor" stroke="none" />
+            </svg>
+            <h3>Proportional.<br /> <span class="drawn-circle">Any screen size.</span></h3>
+            <p>Positions are normalized to the sender’s display, so movement stays in proportion on the receiver.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="steps-section wrap" aria-labelledby="steps-title">
+        <div class="steps-intro">
+          <p class="eyebrow">THREE SMALL STEPS</p>
+          <h2 id="steps-title">Run it. Hold it.<br /> Nudge the edge.</h2>
+          <p>The current build is deliberately minimal. It exists to test one interaction: does a pointer ghost feel right between two Macs?</p>
+        </div>
+        <ol class="steps">
+          <li>
+            <span class="step-number" aria-hidden="true">01</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-mac" /></svg>
+            <h3>Run on both Macs</h3>
+            <p>Launch <strong>ELTransfer.app</strong> on each. A small <code>↔</code> appears in the menu bar.</p>
+          </li>
+          <li>
+            <span class="step-number" aria-hidden="true">02</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-command" /></svg>
+            <h3>Hold <kbd>⌘</kbd> on both</h3>
+            <p>The sender says “share my position.” The receiver says “show it to me.” Both are needed.</p>
+          </li>
+          <li>
+            <span class="step-number" aria-hidden="true">03</span>
+            <svg class="icon" aria-hidden="true"><use href="#i-edge" /></svg>
+            <h3>Move to an edge</h3>
+            <p>Within 24 pixels of any edge, the receiver shows a blue ghost at the matching spot.</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="consent wrap" id="consent">
+        <div class="consent-art" role="img" aria-label="Illustration of two Command key caps, one for each Mac, both pressed at the same time.">
+          <div class="consent-orbit" aria-hidden="true"></div>
+          <div class="keycap keycap-sender" aria-hidden="true">
+            <small>SENDER</small>
+            <svg class="icon" aria-hidden="true"><use href="#i-command" /></svg>
+            <span>command</span>
+          </div>
+          <div class="keycap keycap-receiver" aria-hidden="true">
+            <small>RECEIVER</small>
+            <svg class="icon" aria-hidden="true"><use href="#i-command" /></svg>
+            <span>command</span>
+          </div>
+          <div class="consent-tag" aria-hidden="true">
+            <svg class="icon"><use href="#i-hand" /></svg><span>Let go, and it’s gone.</span>
+          </div>
+        </div>
+        <div class="consent-copy">
+          <p class="eyebrow">A KEY, NOT A CHECKBOX.</p>
+          <h2><span class="notebook-heading">Both hands on ⌘.<svg class="notebook-doodle consent-rays" viewBox="0 0 48 50" aria-hidden="true" focusable="false"><path d="m8 25 9-17M22 32l17-9M24 44l18 2" /></svg></span><br /> Or nothing <span class="marker marker-small">happens.</span></h2>
+          <p>
+            Screen sharing tools ask once and remember forever. ELTransfer asks every single time, with a gesture you can’t forget you’re making.
+            Release either key and the ghost fades within half a second.
+          </p>
+          <ul>
+            <li><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>Nothing sent unless the sender holds <kbd>⌘</kbd></li>
+            <li><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>Nothing shown unless the receiver holds <kbd>⌘</kbd></li>
+            <li><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>No pairing state survives a release</li>
+          </ul>
+          <p class="consent-note">The overlay is click-through. It cannot receive input on the receiving Mac.</p>
+        </div>
+      </section>
+
+      <section class="limits wrap" aria-labelledby="limits-title">
+        <div class="limits-card">
+          <div>
+            <p class="eyebrow">HONEST ABOUT THE EDGES</p>
+            <h2 id="limits-title">Still a prototype.<br /> Here’s what that means.</h2>
+            <p>ELTransfer is an experiment shared early. It tests a feeling, not a finished product. Some things you might expect are simply not there yet.</p>
+          </div>
+          <ul class="limits-list">
+            <li><strong>Not implemented</strong><span>Bonjour discovery, pairing, encryption, multi-display mapping, real pointer handoff.</span></li>
+            <li><strong>Hard-coded target</strong><span>The sender looks for <code>ELTransfer.local</code> on port 47000. Name resolution must work on your network.</span></li>
+            <li><strong>Unsigned build</strong><span>macOS will ask you to confirm the app and to grant Accessibility and Input Monitoring.</span></li>
+            <li><strong>Plain packets</strong><span>Coordinates travel as small JSON over UDP with no authentication. Use it on networks you trust.</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="faq section wrap" id="faq">
+        <h2 class="section-title">Small experiment.<br /> <span class="muted">Clear limits.</span></h2>
+        <div class="faq-list">
+          <details>
+            <summary><span>Can ELTransfer control the other Mac?</span><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></summary>
+            <p>No. It sends normalized cursor coordinates and draws an overlay. It cannot move the receiving Mac’s real cursor, click, type, drag, or scroll. The overlay window ignores mouse events entirely.</p>
+          </details>
+          <details>
+            <summary><span>Does it need the internet?</span><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></summary>
+            <p>No. Both Macs need to be reachable on the same local network. There is no cloud service, no account, and no update feed in this build.</p>
+          </details>
+          <details>
+            <summary><span>Why do both Macs need to hold <kbd>⌘</kbd>?</span><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></summary>
+            <p>It is a consent gesture. Holding the key means “I’m allowing this right now.” Letting go stops sending on one side and stops showing on the other. Nothing is remembered between sessions.</p>
+          </details>
+          <details>
+            <summary><span>What does the receiver actually see?</span><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></summary>
+            <p>A translucent blue circle with a white ring, about 58 pixels across while active. It appears at the proportional position of the sender’s cursor and fades to grey when packets stop arriving.</p>
+          </details>
+          <details id="launch-faq">
+            <summary><span>Why might macOS show a warning?</span><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></summary>
+            <p>This prototype is not signed or notarized. If macOS blocks launch, right-click ELTransfer in Applications and choose Open, or allow it in System Settings → Privacy &amp; Security. It also needs Accessibility and Input Monitoring to read the cursor position and the <kbd>⌘</kbd> key. Only open software you trust.</p>
+          </details>
+          <details>
+            <summary><span>Is the preview above the real app?</span><svg class="icon" aria-hidden="true"><use href="#i-plus" /></svg></summary>
+            <p>It is an illustration of the interaction, not the macOS app. It mirrors the real behaviour: consent on both sides, activation near the edge, a proportional ghost. Nothing is sent from this page.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="install wrap" id="install">
+        <span class="app-icon app-icon-large"><img src="assets/eltransfer-logo.svg" alt="" width="1024" height="1024" /></span>
+        <h2>Two Macs.<br /> <span class="notebook-living">One quick test.<svg class="notebook-doodle living-scribble" viewBox="0 0 300 22" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path pathLength="1" d="M5 11C67 3 174 5 291 8 229 10 105 10 31 17c78-4 172-3 239 0" /></svg></span></h2>
+        <p>Grab the build, run it on both machines,<br /> and see whether a pointer ghost belongs between them.</p>
+        <a class="button button-primary" href="downloads/ELTransfer.dmg" download><svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>Download for Mac</a>
+        <p class="compatibility"><span data-app-version>v0.1</span> · macOS 13+ · Apple silicon · <span data-download-size>0.3 MB</span> DMG</p>
+        <ol class="install-steps">
+          <li><span aria-hidden="true">1</span> Open the DMG</li>
+          <li><span aria-hidden="true">2</span> Drag into Applications, on both Macs</li>
+          <li><span aria-hidden="true">3</span> Launch. Hold ⌘. Nudge the edge.</li>
+        </ol>
+        <p class="preview-note">
+          Prototype build · Built on GitHub · Not notarized.
+          <a href="#launch-faq" id="launch-help">First-launch help ↗</a>
+        </p>
+        <p class="checksum"><span>SHA-256</span><code data-download-sha256>a9ee8b852ac588c5392f5e7ba63527c05873dc96d34e334aeac8f1a06896332a</code></p>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <a class="brand" href="#top" aria-label="ELTransfer home">ELTransfer <span class="version" data-app-version>v0.1</span></a>
+      <p>A pointer that visits. Never one that stays.</p>
+      <span>© 2026 EL</span>
+      <a class="button button-soft about-button" href="about.html">Privacy, security &amp; support ↗</a>
+      <nav class="footer-links" aria-label="Footer navigation"><a href="about.html#privacy-policy">Privacy</a> <a href="about.html#security">Security</a> <a href="about.html#support">Developer &amp; support</a> <a href="#top">Back to top ↑</a></nav>
+    </footer>
+
+    <div class="download-toast" role="status" aria-live="polite">
+      <span class="toast-icon"><svg class="icon" aria-hidden="true"><use href="#i-download" /></svg></span>
+      <span><strong>Your download is starting.</strong><small>Open the DMG, then drag ELTransfer to Applications on both Macs.</small></span>
+    </div>
+    <script src="script.js?v=4"></script>
+  </body>
+</html>

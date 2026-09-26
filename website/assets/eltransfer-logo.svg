@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">ELTransfer arrows</title>
+  <rect x="58" y="58" width="908" height="908" rx="210" fill="#F2F0E8"/>
+  <g fill="none" stroke="#0A1821" stroke-width="70" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M356 318C296 382 242 426 194 460C290 460 400 460 512 460C624 460 734 460 830 460C782 426 728 382 668 318"/>
+    <path d="M356 706C296 642 242 598 194 564C290 564 400 564 512 564C624 564 734 564 830 564C782 598 728 642 668 706"/>
+  </g>
+</svg>

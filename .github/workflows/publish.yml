@@ -1,0 +1,63 @@
+name: Build DMG and publish website
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eltransfer-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Build app and DMG
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/build-app.sh
+          ./scripts/build-dmg.sh
+
+      - name: Configure website deploy key
+        env:
+          DUUBERIAN_SITE_DEPLOY_KEY: ${{ secrets.DUUBERIAN_SITE_DEPLOY_KEY }}
+        run: |
+          test -n "$DUUBERIAN_SITE_DEPLOY_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DUUBERIAN_SITE_DEPLOY_KEY" > ~/.ssh/eltransfer-site
+          chmod 600 ~/.ssh/eltransfer-site
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Sync download website
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/eltransfer-site -o IdentitiesOnly=yes
+        run: |
+          git clone --depth 1 git@github.com:duuberian/duuberian.git "$RUNNER_TEMP/site"
+          ./scripts/stage-website.sh "$RUNNER_TEMP/site"
+          cd "$RUNNER_TEMP/site"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all eltransfer
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish ELTransfer build ${GITHUB_SHA::7}"
+            git push
+          fi
+
+      - name: Verify the publicly served download
+        run: |
+          EXPECTED=$(cut -d' ' -f1 website/downloads/ELTransfer.dmg.sha256)
+          for attempt in $(seq 1 30); do
+            ACTUAL=$(curl -fsSL "https://duuberian.com/eltransfer/downloads/ELTransfer.dmg?run=$GITHUB_RUN_ID" | shasum -a 256 | cut -d' ' -f1 || true)
+            if [ "$ACTUAL" = "$EXPECTED" ]; then echo "Live DMG matches $EXPECTED"; exit 0; fi
+            sleep 20
+          done
+          echo "::error::Live DMG never matched the built checksum ($EXPECTED)"
+          exit 1
