@@ -29,7 +29,7 @@
           <article id="security">
             <p class="eyebrow">SECURITY DETAILS</p>
             <h2>A pointer position. That’s the whole payload.</h2>
-            <p>The sender transmits a small JSON message over UDP on port 47000: a normalized x and y, the sender’s screen size, and an active flag. No screen contents, keystrokes, clipboard, or file data are ever read or sent.</p>
+            <p>The sender transmits a small JSON message over UDP on port 47000: a normalized x and y, the sender’s screen size, an active flag, and the selected pointer colour and shape. No screen contents, keystrokes, clipboard, or file data are ever read or sent.</p>
             <p>The receiver draws a borderless, click-through overlay window. It ignores mouse events and cannot inject input, so it cannot move, click, or type on your Mac.</p>
             <p>Accessibility and Input Monitoring permissions let the app read the cursor position and detect the <kbd>⌘</kbd> key globally. This prototype is not signed or notarized, and packets are not authenticated or encrypted. Use it only on networks you trust.</p>
             <a href="index.html#launch-faq">Read the first-launch guidance ↗</a>
@@ -47,8 +47,8 @@
           <p class="eyebrow">PRIVACY · UPDATED 26 SEPTEMBER 2026</p>
           <h2 id="policy-title">What stays here. What gets sent.</h2>
           <dl>
-            <div><dt>On your Mac</dt><dd>The app stores no preferences, history, or pairing state. Diagnostic lines about connection state are printed to the system log while the app runs and are not sent anywhere.</dd></div>
-            <div><dt>On your network</dt><dd>While the sender holds <kbd>⌘</kbd> at a screen edge, it sends cursor positions to <code>ELTransfer.local</code> on your local network. The receiver listens on the same port. Other devices on the network could observe these packets; they contain only coordinates.</dd></div>
+            <div><dt>On your Mac</dt><dd>The app stores only your local pointer colour and shape preference. It stores no history or pairing state. Diagnostic lines about connection state are printed to the system log while the app runs and are not sent anywhere.</dd></div>
+            <div><dt>On your network</dt><dd>While the sender holds <kbd>⌘</kbd> at a screen edge, it sends cursor positions to <code>ELTransfer.local</code> on your local network. The receiver listens on the same port. Other devices on the network could observe these packets; they contain only pointer position and appearance data.</dd></div>
             <div><dt>Internet</dt><dd>The app makes no internet connections. There is no update check, no analytics, and no account.</dd></div>
             <div><dt>This website</dt><dd>The demo runs entirely in your browser and sends nothing. The page has no analytics scripts or advertising trackers. It loads its font from Google Fonts, which receives a normal web request including your IP address and may keep service logs.</dd></div>
             <div><dt>Questions</dt><dd>Use the public support link above. Information you include in a public report is visible to others, so leave out sensitive details.</dd></div>
