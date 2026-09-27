@@ -3,9 +3,12 @@ import SwiftUI
 
 /// Live state shown along the bottom of the menu.
 final class MenuStatus: ObservableObject {
-    @Published var permissionsGranted = false
+    @Published var accessibilityGranted = false
+    @Published var inputMonitoringGranted = false
     @Published var sending = false
     @Published var receiving = false
+
+    var permissionsGranted: Bool { accessibilityGranted && inputMonitoringGranted }
 
     var summary: String {
         if !permissionsGranted { return "Needs permissions" }
@@ -18,6 +21,8 @@ final class MenuStatus: ObservableObject {
 struct MenuView: View {
     @ObservedObject var settings = CursorSettings.shared
     @ObservedObject var status: MenuStatus
+    @ObservedObject private var updater = AppUpdater.shared
+    let openSettings: () -> Void
     let quit: () -> Void
 
     var body: some View {
@@ -67,6 +72,29 @@ struct MenuView: View {
             .background(ELStyle.soft.opacity(0.6), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(ELStyle.line, lineWidth: 1))
 
+            if let version = updater.availableVersion {
+                Button { updater.checkForUpdates() } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(settings.color.stroke)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Update Available").font(.system(size: 12, weight: .semibold))
+                            Text("ELTransfer \(version) · Review Update…")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ELStyle.muted)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .modifier(TileStyle())
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!updater.canShowUpdate)
+            }
+
             HStack(spacing: 8) {
                 Image(systemName: "command")
                     .font(.system(size: 14, weight: .semibold))
@@ -74,12 +102,19 @@ struct MenuView: View {
                     .frame(width: 48, height: 40)
                     .modifier(TileStyle())
                     .help("Sender: hold ⌘ at a screen edge. Receiver: hold ⌘ to allow the incoming pointer.")
-                Text(status.summary)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(status.permissionsGranted ? ELStyle.muted : .orange)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, minHeight: 40)
-                    .modifier(TileStyle())
+                Button(action: openSettings) {
+                    Text(status.summary)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(status.permissionsGranted ? ELStyle.muted : .orange)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .modifier(TileStyle())
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(",")
+                .help("ELTransfer \(updater.currentVersion) — Open Settings")
+                .accessibilityLabel("\(status.summary). Open Settings")
                 Button(action: quit) {
                     Image(systemName: "power")
                         .font(.system(size: 14, weight: .semibold))
@@ -141,8 +176,6 @@ private struct MenuPanelRoot: View {
             .background(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(ELStyle.surface)
-                    .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
-                    .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
             )
             .compositingGroup()
             .scaleEffect(settled ? 1 : 0.94, anchor: .top)
@@ -167,7 +200,7 @@ final class MenuPanelController {
     /// Logical open state; the panel can still be on screen while its exit animation runs.
     private(set) var isVisible = false
 
-    init(status: MenuStatus) {
+    init(status: MenuStatus, openSettings: @escaping () -> Void) {
         panel = MenuPanelWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                                 backing: .buffered, defer: true)
         panel.isOpaque = false
@@ -175,7 +208,7 @@ final class MenuPanelController {
         panel.hasShadow = false
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let menu = MenuView(status: status) { NSApp.terminate(nil) }
+        let menu = MenuView(status: status, openSettings: openSettings) { NSApp.terminate(nil) }
         let host = TransparentHostingView(rootView: MenuPanelRoot(presentation: presentation, menu: menu))
         host.setFrameSize(host.fittingSize)
         panel.contentView = host

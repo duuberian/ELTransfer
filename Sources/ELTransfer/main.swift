@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreGraphics
 import Foundation
 import Network
@@ -49,8 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var receiver: Receiver?
     private var isConfigured = false
     private let status = MenuStatus()
-    private lazy var menuPanel = MenuPanelController(status: status)
+    private lazy var settingsWindow = SettingsWindowController(status: status)
+    private lazy var menuPanel = MenuPanelController(status: status) { [weak self] in self?.openSettings() }
     private var statusTimer: Timer?
+    private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem.button?.image = menuBarArtwork
@@ -60,6 +63,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         NSApp.activate(ignoringOtherApps: true)
         requestSystemPermissions()
+        settingsWindow.onVisibilityChange = { [weak self] _ in self?.updateStatusTimer() }
+        observeUpdates()
+        AppUpdater.shared.start()
+        // Drop the menu down on launch so it is clear ELTransfer lives in the menu bar.
+        // Wait a beat for the status item to be placed.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.showMenu() }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Opening the app again (Finder, Spotlight, Dock) points back at the menu bar.
+        showMenu()
+        return false
+    }
+
+    @MainActor private func observeUpdates() {
+        let updater = AppUpdater.shared
+        updater.$updateNotification
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] version in
+                guard version != nil, updater.availableVersion != nil else { return }
+                self?.showMenu()
+            }
+            .store(in: &cancellables)
+        // The update row changes the menu's height; resize if it is already open.
+        updater.$availableVersion
+            .removeDuplicates()
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self, menuPanel.isVisible else { return }
+                DispatchQueue.main.async { self.showMenu() }
+            }
+            .store(in: &cancellables)
     }
 
     private func requestSystemPermissions() {
@@ -72,8 +109,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ask for Input Monitoring / global event listening.
         let eventListeningAllowed = CGRequestListenEventAccess()
 
+        status.accessibilityGranted = accessibilityTrusted
+        status.inputMonitoringGranted = eventListeningAllowed
         let permissionsGranted = accessibilityTrusted && eventListeningAllowed
-        status.permissionsGranted = permissionsGranted
         statusItem.button?.title = permissionsGranted ? "↔" : "⚠️"
         print("ELTransfer: permissions - accessibility=\(accessibilityTrusted), inputMonitoring=\(eventListeningAllowed)")
         print("ELTransfer: if macOS did not prompt, enable ELTransfer in System Settings > Privacy & Security > Accessibility and Input Monitoring.")
@@ -90,24 +128,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleMenu() {
-        guard let button = statusItem.button else { return }
         if menuPanel.isVisible {
             menuPanel.hide()
-            statusTimer?.invalidate()
+            updateStatusTimer()
             return
         }
+        showMenu()
+    }
+
+    private func showMenu() {
+        guard let button = statusItem.button else { return }
         refreshStatus()
         menuPanel.show(below: button)
-        // Keep the bottom status tile live while the panel is open.
-        statusTimer?.invalidate()
-        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] timer in
-            guard let self, menuPanel.isVisible else { timer.invalidate(); return }
+        updateStatusTimer()
+    }
+
+    private func openSettings() {
+        menuPanel.hide()
+        refreshStatus()
+        settingsWindow.show()
+    }
+
+    /// Keeps the menu's status tile and the settings' permission rows live while either is open.
+    private func updateStatusTimer() {
+        guard menuPanel.isVisible || settingsWindow.isVisible else {
+            statusTimer?.invalidate()
+            statusTimer = nil
+            return
+        }
+        guard statusTimer == nil else { return }
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            // Closing the window or dismissing the menu by an outside click stops the timer here.
+            guard menuPanel.isVisible || settingsWindow.isVisible else {
+                statusTimer?.invalidate()
+                statusTimer = nil
+                return
+            }
             refreshStatus()
         }
     }
 
     private func refreshStatus() {
-        status.permissionsGranted = AXIsProcessTrusted() && CGPreflightListenEventAccess()
+        status.accessibilityGranted = AXIsProcessTrusted()
+        status.inputMonitoringGranted = CGPreflightListenEventAccess()
         status.sending = sender?.isSending ?? false
         status.receiving = receiver?.isReceiving ?? false
     }
@@ -380,8 +444,10 @@ struct PointerView: View {
     }
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    app.run()
+}
