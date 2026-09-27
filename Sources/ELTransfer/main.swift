@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 import Network
+import SwiftUI
 
 struct PointerPacket: Codable {
     var x: Double
@@ -9,6 +10,9 @@ struct PointerPacket: Codable {
     var width: Double
     var height: Double
     var active: Bool
+    // Optional so packets from older builds still decode.
+    var color: CursorColor?
+    var shape: CursorShape?
 }
 
 /// The two logo strokes, fitted without the tile, as a template image.
@@ -39,24 +43,21 @@ let menuBarArtwork: NSImage = {
     return image
 }()
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     var sender: Sender?
     var receiver: Receiver?
-    var senderMode = false
-    var receiverMode = false
     private var isConfigured = false
+    private let status = MenuStatus()
+    private lazy var menuPanel = MenuPanelController(status: status)
+    private var statusTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let menu = NSMenu()
-        menu.delegate = self
-        menu.addItem(NSMenuItem(title: "Sender: hold ⌘ at screen edge", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Receiver: hold ⌘ to allow incoming pointer", action: nil, keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        statusItem.menu = menu
         statusItem.button?.image = menuBarArtwork
         statusItem.button?.toolTip = "ELTransfer"
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(toggleMenu)
+        statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         NSApp.activate(ignoringOtherApps: true)
         requestSystemPermissions()
     }
@@ -72,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let eventListeningAllowed = CGRequestListenEventAccess()
 
         let permissionsGranted = accessibilityTrusted && eventListeningAllowed
+        status.permissionsGranted = permissionsGranted
         statusItem.button?.title = permissionsGranted ? "↔" : "⚠️"
         print("ELTransfer: permissions - accessibility=\(accessibilityTrusted), inputMonitoring=\(eventListeningAllowed)")
         print("ELTransfer: if macOS did not prompt, enable ELTransfer in System Settings > Privacy & Security > Accessibility and Input Monitoring.")
@@ -87,10 +89,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         isConfigured = true
     }
 
-    func menuWillOpen(_ menu: NSMenu) {
-        senderMode = sender?.isSending ?? false
-        receiverMode = receiver?.isReceiving ?? false
-        print("ELTransfer: configured=\(isConfigured), sender active=\(senderMode), receiver active=\(receiverMode), accessibility=\(AXIsProcessTrusted())")
+    @objc private func toggleMenu() {
+        guard let button = statusItem.button else { return }
+        if menuPanel.isVisible {
+            menuPanel.hide()
+            statusTimer?.invalidate()
+            return
+        }
+        refreshStatus()
+        menuPanel.show(below: button)
+        // Keep the bottom status tile live while the panel is open.
+        statusTimer?.invalidate()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] timer in
+            guard let self, menuPanel.isVisible else { timer.invalidate(); return }
+            refreshStatus()
+        }
+    }
+
+    private func refreshStatus() {
+        status.permissionsGranted = AXIsProcessTrusted() && CGPreflightListenEventAccess()
+        status.sending = sender?.isSending ?? false
+        status.receiving = receiver?.isReceiving ?? false
     }
 }
 
@@ -157,6 +176,9 @@ final class Sender {
     }
 
     private func send(packet: PointerPacket) {
+        var packet = packet
+        packet.color = CursorSettings.shared.color
+        packet.shape = CursorSettings.shared.shape
         guard let data = try? JSONEncoder().encode(packet), let connection else { return }
         connection.send(content: data, completion: .contentProcessed { _ in })
     }
@@ -248,32 +270,41 @@ final class OverlayWindow: NSWindow {
         }
         let px = frame.minX + x * frame.width
         let py = frame.minY + packet.y * frame.height
-        let size: CGFloat = active ? 58 : 44
-        setFrame(NSRect(x: px - CGFloat(size) / 2, y: py - CGFloat(size) / 2, width: size, height: size), display: true)
-        contentView = PointerView(active: active)
+        let color = packet.color ?? CursorSettings.shared.color
+        let shape = packet.shape ?? CursorSettings.shared.shape
+        let size: CGFloat = active ? 44 : 34
+        let inset: CGFloat = 3
+        let origin: NSPoint
+        if shape == .arrow {
+            // The arrow's tip marks the pointer position.
+            origin = NSPoint(x: px - inset, y: py + inset - size)
+        } else {
+            origin = NSPoint(x: px - size / 2, y: py - size / 2)
+        }
+        setFrame(NSRect(origin: origin, size: NSSize(width: size, height: size)), display: true)
+        let view = PointerView(color: color, shape: shape, active: active, inset: inset)
+        if let host = contentView as? NSHostingView<PointerView> {
+            host.rootView = view
+        } else {
+            contentView = NSHostingView(rootView: view)
+        }
         orderFrontRegardless()
     }
 }
 
-final class PointerView: NSView {
-    private let active: Bool
-    init(active: Bool) {
-        self.active = active
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = bounds.width / 2
-    }
+struct PointerView: View {
+    let color: CursorColor
+    let shape: CursorShape
+    let active: Bool
+    let inset: CGFloat
 
-    required init?(coder: NSCoder) { nil }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let color = active ? NSColor.systemBlue.withAlphaComponent(0.75) : NSColor.systemGray.withAlphaComponent(0.5)
-        color.setFill()
-        NSBezierPath(ovalIn: bounds).fill()
-        NSColor.white.withAlphaComponent(0.9).setStroke()
-        let ring = NSBezierPath(ovalIn: bounds.insetBy(dx: 7, dy: 7))
-        ring.lineWidth = 4
-        ring.stroke()
+    var body: some View {
+        CursorGlyph(color: color, shape: shape, lineWidth: 2.5)
+            .padding(inset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .opacity(active ? 1 : 0.45)
+            .saturation(active ? 1 : 0.2)
+            .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
     }
 }
 
