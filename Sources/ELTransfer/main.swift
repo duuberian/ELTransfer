@@ -62,6 +62,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.action = #selector(toggleMenu)
         statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         NSApp.activate(ignoringOtherApps: true)
+        Task { @MainActor in
+            do {
+                // The fresh process owns setup after recovery.
+                if try await AccessibilityRecovery.recoverAfterUpdate() { return }
+            } catch {
+                print("ELTransfer: update permission recovery failed - \(error.localizedDescription)")
+            }
+            finishLaunching()
+        }
+    }
+
+    @MainActor private func finishLaunching() {
         requestSystemPermissions()
         settingsWindow.onVisibilityChange = { [weak self] _ in self?.updateStatusTimer() }
         observeUpdates()
