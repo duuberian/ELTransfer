@@ -30,12 +30,13 @@ def stamp(target, app_info):
             rf'(<(?:span|code)\b[^>]*\bdata-{name}(?:="")?[^>]*>)[^<]*(</(?:span|code)>)',
             lambda match: match[1] + html.escape(value) + match[2], page,
         )
-        if not count:
-            raise ValueError(f"No data-{name} labels found")
+        if not count and name == "app-version":
+            raise ValueError(f"No data-{name} labels found in {target.name}")
     target.write_text(page)
     print(f"App version: {release['app-version']}; download: {release['download-size']}; sha256: {digest[:12]}…")
 
 
 if __name__ == "__main__":
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "website/index.html"
-    stamp(target, ROOT / "build/ELTransfer.app/Contents/Info.plist")
+    targets = [Path(arg) for arg in sys.argv[1:]] or [ROOT / "website/index.html"]
+    for target in targets:
+        stamp(target, ROOT / "build/ELTransfer.app/Contents/Info.plist")

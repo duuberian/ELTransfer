@@ -7,6 +7,7 @@
   <key>CFBundleIdentifier</key><string>com.duuberian.ELTransfer</string>
   <key>CFBundleName</key><string>ELTransfer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <!-- Release builds stamp both versions from Git history; see scripts/build-app.sh. -->
   <key>CFBundleShortVersionString</key><string>0.1.4</string>
   <key>CFBundleVersion</key><string>3</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
