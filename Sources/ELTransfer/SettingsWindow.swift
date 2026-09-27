@@ -146,9 +146,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.center()
             window.delegate = self
             self.window = window
+            LocalPointer.shared.track(window)
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        LocalPointer.shared.wake()
         onVisibilityChange?(true)
     }
 
