@@ -73,6 +73,7 @@ struct SettingsView: View {
         .background(ELStyle.paper)
         .foregroundStyle(ELStyle.ink)
         .onAppear { updater.checkForUpdates() }
+        .localPointer("settings")
     }
 
     private var updateTitle: String {
@@ -146,11 +147,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.center()
             window.delegate = self
             self.window = window
-            LocalPointer.shared.track(window)
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
-        LocalPointer.shared.wake()
         onVisibilityChange?(true)
     }
 

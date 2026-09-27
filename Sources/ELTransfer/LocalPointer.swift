@@ -2,142 +2,155 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// While the mouse is over ELTransfer's own windows, the system arrow is hidden and the
-/// chosen pointer, swing included, is drawn in its place. The overlay ignores the mouse,
-/// and the pointer's tip (or the circle's centre) sits on the hotspot, so clicks land
-/// exactly where it points.
+/// While the mouse is over ELTransfer's own views, the system arrow becomes the chosen
+/// pointer, swing included. It is a real cursor drawn by the window server, so it never
+/// lags the mouse, and its hotspot is the pointer's tip (or the circle's centre), so
+/// clicks land exactly where it points.
+@MainActor
 final class LocalPointer {
     static let shared = LocalPointer()
 
-    private struct Region {
-        weak var window: NSWindow?
-        let rect: (NSWindow) -> NSRect
-    }
-
-    private var regions: [Region] = []
-    private let model = PointerOverlayModel()
-    private lazy var overlay = makeOverlay()
+    /// Height of the pointer glyph, in points; the circle uses it as its diameter.
+    private let glyphSize: CGFloat = 26
+    private let lineWidth: CGFloat = 2
+    private let swing = PointerSwing()
+    private var hovered: Set<String> = []
     private var timer: Timer?
-    private var isInside = false
+    private var cursors: [String: NSCursor] = [:]
+    private var current: NSCursor?
     private var cancellables: Set<AnyCancellable> = []
-    private let blankCursor = NSCursor(image: NSImage(size: NSSize(width: 1, height: 1)), hotSpot: .zero)
 
     private init() {
-        // Position follows the mouse exactly; only the swing and entrance animate.
-        model.snap = true
-        CursorSettings.shared.$color.sink { [weak self] in self?.model.color = $0 }.store(in: &cancellables)
-        CursorSettings.shared.$shape.sink { [weak self] in self?.model.shape = $0 }.store(in: &cancellables)
+        // A new look replaces every cached image.
+        CursorSettings.shared.$color.combineLatest(CursorSettings.shared.$shape)
+            .dropFirst()
+            .sink { [weak self] _, _ in
+                self?.cursors.removeAll()
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.apply() } }
+            }
+            .store(in: &cancellables)
     }
 
-    /// Draws the pointer over `window`, limited to `rect` (screen coordinates) when the
-    /// window has transparent margins.
-    func track(_ window: NSWindow, rect: @escaping (NSWindow) -> NSRect = { $0.frame }) {
-        regions.removeAll { $0.window == nil || $0.window === window }
-        regions.append(Region(window: window, rect: rect))
-        wake()
+    /// `region` names a hover area; the pointer shows while any area is hovered.
+    func hover(_ region: String, inside: Bool) {
+        let wasInside = !hovered.isEmpty
+        if inside { hovered.insert(region) } else { hovered.remove(region) }
+        guard wasInside != !hovered.isEmpty else { return }
+        inside ? begin() : end()
     }
 
-    /// Call when a tracked window appears so hovering is noticed.
-    func wake() {
+    private func begin() {
+        swing.reset()
+        record()
+        apply()
         guard timer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in self?.tick() }
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
 
-    private func tick() {
-        let mouse = NSEvent.mouseLocation
-        let live = regions.compactMap { region -> (NSWindow, NSRect)? in
-            guard let window = region.window, window.isVisible, !window.ignoresMouseEvents else { return nil }
-            return (window, region.rect(window))
-        }
-        let inside = live.contains { window, rect in
-            rect.contains(mouse) && !isCovered(window, at: mouse)
-        }
-        if inside != isInside {
-            isInside = inside
-            inside ? enter(at: mouse) : exit()
-        }
-        if inside {
-            move(to: mouse)
-            // Other views may reset the cursor on the way in; keep the arrow hidden.
-            blankCursor.set()
-        } else if live.isEmpty {
-            timer?.invalidate()
-            timer = nil
-        }
-    }
-
-    private var coverCache: (window: Int, time: TimeInterval, covered: Bool)?
-
-    /// Whether another app's window sits above `window` at `mouse`. Asking the window
-    /// server is costly, so a result is reused for a moment.
-    private func isCovered(_ window: NSWindow, at mouse: NSPoint) -> Bool {
-        let now = Date.timeIntervalSinceReferenceDate
-        if let cache = coverCache, cache.window == window.windowNumber, now - cache.time < 0.1 {
-            return cache.covered
-        }
-        let covered = windowsAbove(window).contains { info in
-            guard (info[kCGWindowOwnerPID as String] as? pid_t) != getpid(),
-                  // Screen-saver-level windows are click-through overlays, like ELTransfer's own.
-                  (0..<Int(CGWindowLevelForKey(.screenSaverWindow))).contains(info[kCGWindowLayer as String] as? Int ?? 0),
-                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
-                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-                  let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
-            // Window server bounds are top-left origin on the primary display.
-            let flipped = CGPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - mouse.y)
-            return rect.contains(flipped)
-        }
-        coverCache = (window.windowNumber, now, covered)
-        return covered
-    }
-
-    private func windowsAbove(_ window: NSWindow) -> [[String: Any]] {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .optionOnScreenAboveWindow, .excludeDesktopElements]
-        return CGWindowListCopyWindowInfo(options, CGWindowID(window.windowNumber)) as? [[String: Any]] ?? []
-    }
-
-    private func enter(at mouse: NSPoint) {
-        model.swing.reset()
-        model.active = false
-        move(to: mouse)
-        overlay.orderFrontRegardless()
-        NSCursor.hide()
-        DispatchQueue.main.async { [weak self] in
-            guard let self, isInside else { return }
-            model.active = true
-        }
-    }
-
-    private func exit() {
-        // Hand straight back to the system arrow so two pointers never show at once.
-        model.active = false
-        overlay.orderOut(nil)
-        NSCursor.unhide()
+    private func end() {
+        timer?.invalidate()
+        timer = nil
+        current = nil
         NSCursor.arrow.set()
     }
 
-    private func move(to mouse: NSPoint) {
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) else { return }
-        if overlay.frame != screen.frame { overlay.setFrame(screen.frame, display: false) }
-        let point = CGPoint(x: mouse.x - screen.frame.minX, y: screen.frame.maxY - mouse.y)
-        model.swing.record(point, snap: false)
-        if model.point != point { model.point = point }
+    private func tick() {
+        // A hovered view that vanished (the menu closing under the mouse) sends no exit.
+        let mouse = NSEvent.mouseLocation
+        let overOwnWindow = NSApp.windows.contains { window in
+            window.isVisible && !window.ignoresMouseEvents && window.level != .screenSaver
+                && window.frame.contains(mouse)
+        }
+        guard overOwnWindow else {
+            hovered.removeAll()
+            end()
+            return
+        }
+        record()
+        apply()
     }
 
-    private func makeOverlay() -> NSWindow {
-        let window = NSWindow(contentRect: NSScreen.main?.frame ?? .zero, styleMask: [.borderless],
-                              backing: .buffered, defer: false)
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        window.level = .screenSaver
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        window.ignoresMouseEvents = true
-        window.hasShadow = false
-        window.isReleasedWhenClosed = false
-        let host = NSHostingView(rootView: PointerView(model: model))
-        host.sizingOptions = []
-        window.contentView = host
-        return window
+    private func record() {
+        let mouse = NSEvent.mouseLocation
+        swing.record(CGPoint(x: mouse.x, y: -mouse.y), snap: false)
+    }
+
+    /// Sets the cursor for the current swing angle, reasserting it each frame because
+    /// hosted views reset the cursor as the mouse crosses them.
+    private func apply() {
+        guard !hovered.isEmpty else { return }
+        let shape = CursorSettings.shared.shape
+        let angle = shape.isPointer ? swing.angle(at: Date.timeIntervalSinceReferenceDate) : 0
+        let cursor = cursor(color: CursorSettings.shared.color, shape: shape, degrees: Int(angle.rounded()))
+        if current !== cursor || NSCursor.current !== cursor {
+            current = cursor
+            cursor.set()
+        }
+    }
+
+    private func cursor(color: CursorColor, shape: CursorShape, degrees: Int) -> NSCursor {
+        let key = "\(color.rawValue)-\(shape.rawValue)-\(degrees)"
+        if let cursor = cursors[key] { return cursor }
+        let cursor = makeCursor(color: color, shape: shape, degrees: Double(degrees))
+        cursors[key] = cursor
+        return cursor
+    }
+
+    /// Renders the glyph on a square canvas centred on the hotspot, so it can turn about
+    /// the tip without clipping.
+    private func makeCursor(color: CursorColor, shape: CursorShape, degrees: Double) -> NSCursor {
+        let pointer = shape.isPointer
+        let size = pointer ? CGSize(width: glyphSize * ArrowShape.aspect, height: glyphSize)
+                           : CGSize(width: glyphSize, height: glyphSize)
+        let half = (pointer ? glyphSize * 1.25 : glyphSize / 2) + 4
+        let offset = pointer ? CGPoint(x: half - lineWidth / 2, y: half - lineWidth / 2)
+                             : CGPoint(x: half - size.width / 2, y: half - size.height / 2)
+        let image = NSImage(size: NSSize(width: half * 2, height: half * 2))
+        let renderer = ImageRenderer(content: CursorImage(color: color, shape: shape, lineWidth: lineWidth,
+                                                          size: size, degrees: degrees, offset: offset, side: half * 2))
+        renderer.scale = 2
+        if let cgImage = renderer.cgImage {
+            image.addRepresentation(NSBitmapImageRep(cgImage: cgImage))
+            image.representations.first?.size = image.size
+        }
+        return NSCursor(image: image, hotSpot: NSPoint(x: half, y: half))
+    }
+}
+
+/// One frame of the cursor: the glyph turned about its tip and placed on the canvas.
+private struct CursorImage: View {
+    let color: CursorColor
+    let shape: CursorShape
+    let lineWidth: CGFloat
+    let size: CGSize
+    let degrees: Double
+    let offset: CGPoint
+    let side: CGFloat
+
+    var body: some View {
+        let tip = UnitPoint(x: lineWidth / 2 / size.width, y: lineWidth / 2 / size.height)
+        CursorGlyph(color: color, shape: shape, lineWidth: lineWidth)
+            .frame(width: size.width, height: size.height)
+            .rotationEffect(.degrees(degrees), anchor: tip)
+            .shadow(color: .black.opacity(0.3), radius: 1.5, y: 1)
+            .offset(x: offset.x, y: offset.y)
+            .frame(width: side, height: side, alignment: .topLeading)
+    }
+}
+
+extension View {
+    /// Shows ELTransfer's pointer in place of the arrow while the mouse is over this view.
+    func localPointer(_ region: String) -> some View {
+        onContinuousHover { phase in
+            if case .active = phase {
+                LocalPointer.shared.hover(region, inside: true)
+            } else {
+                LocalPointer.shared.hover(region, inside: false)
+            }
+        }
     }
 }

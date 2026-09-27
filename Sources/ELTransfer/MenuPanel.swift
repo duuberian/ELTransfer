@@ -137,6 +137,7 @@ struct MenuView: View {
         .background(ELStyle.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(ELStyle.line, lineWidth: 0.7))
         .foregroundStyle(ELStyle.ink)
+        .localPointer("menu")
     }
 }
 
@@ -216,14 +217,6 @@ final class MenuPanelController {
         host.setFrameSize(host.fittingSize)
         panel.contentView = host
         panel.setContentSize(host.fittingSize)
-        // Only the menu itself, not the transparent shadow margins around it.
-        LocalPointer.shared.track(panel) { window in
-            let insets = MenuPanelRoot.insets
-            let frame = window.frame
-            return NSRect(x: frame.minX + insets.leading, y: frame.minY + insets.bottom,
-                          width: frame.width - insets.leading - insets.trailing,
-                          height: frame.height - insets.top - insets.bottom)
-        }
     }
 
     func show(below button: NSStatusBarButton) {
@@ -248,7 +241,6 @@ final class MenuPanelController {
         panel.ignoresMouseEvents = false
         panel.makeKeyAndOrderFront(nil)
         startDismissMonitors(ignoring: button)
-        LocalPointer.shared.wake()
         if wasOnScreen {
             // Reopened mid-exit: reverse from the current in-flight state.
             presentation.isPresented = true
