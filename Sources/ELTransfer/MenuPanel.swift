@@ -78,13 +78,14 @@ struct MenuView: View {
                         Image(systemName: "arrow.down.circle.fill")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(settings.color.stroke)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Update Available").font(.system(size: 12, weight: .semibold))
-                            Text("ELTransfer \(version) · Review Update…")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ELStyle.muted)
-                        }
-                        Spacer(minLength: 0)
+                        Text("Update Available")
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(version)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(ELStyle.muted)
+                            .lineLimit(1)
                     }
                     .padding(.horizontal, 12)
                     .frame(maxWidth: .infinity, minHeight: 44)
@@ -93,6 +94,8 @@ struct MenuView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!updater.canShowUpdate)
+                .help("Review the ELTransfer \(version) update")
+                .accessibilityLabel("Update available, ELTransfer \(version). Review update")
             }
 
             HStack(spacing: 8) {
