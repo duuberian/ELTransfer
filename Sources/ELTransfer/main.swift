@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var settingsWindow = SettingsWindowController(status: status)
     private lazy var menuPanel = MenuPanelController(status: status) { [weak self] in self?.openSettings() }
     private var statusTimer: Timer?
+    private var permissionTimer: Timer?
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -123,13 +124,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         status.accessibilityGranted = accessibilityTrusted
         status.inputMonitoringGranted = eventListeningAllowed
-        let permissionsGranted = accessibilityTrusted && eventListeningAllowed
-        statusItem.button?.title = permissionsGranted ? "↔" : "⚠️"
+        updatePermissionBadge()
         print("ELTransfer: permissions - accessibility=\(accessibilityTrusted), inputMonitoring=\(eventListeningAllowed)")
         print("ELTransfer: if macOS did not prompt, enable ELTransfer in System Settings > Privacy & Security > Accessibility and Input Monitoring.")
 
         // Services start immediately; they become fully useful once the user grants the prompts.
         configureServices()
+        watchPermissions()
+    }
+
+    private func updatePermissionBadge() {
+        statusItem.button?.title = status.permissionsGranted ? "↔" : "⚠️"
+    }
+
+    /// Grants made in System Settings arrive while the app runs. Poll both permissions,
+    /// and when one is newly granted reinstall the event monitors, which macOS does not
+    /// start delivering to monitors added before access was allowed.
+    private func watchPermissions() {
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let hadAccessibility = status.accessibilityGranted
+            let hadInputMonitoring = status.inputMonitoringGranted
+            refreshStatus()
+            let gained = (!hadAccessibility && status.accessibilityGranted)
+                || (!hadInputMonitoring && status.inputMonitoringGranted)
+            if gained {
+                print("ELTransfer: permissions - accessibility=\(status.accessibilityGranted), inputMonitoring=\(status.inputMonitoringGranted)")
+                sender?.reinstallMonitors()
+                receiver?.reinstallMonitor()
+            }
+            updatePermissionBadge()
+        }
     }
 
     private func configureServices() {
@@ -201,6 +227,15 @@ final class Sender {
     init() {
         connect()
         installMonitors()
+        // Try to catch initial state too.
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.handleCursor()
+        }
+    }
+
+    func reinstallMonitors() {
+        [mouseMonitor, flagMonitor].compactMap { $0 }.forEach(NSEvent.removeMonitor)
+        installMonitors()
     }
 
     private func connect() {
@@ -217,10 +252,6 @@ final class Sender {
         }
         flagMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { self?.handleCursor(force: true) }
-        }
-        // Try to catch initial state too.
-        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            self?.handleCursor()
         }
     }
 
@@ -271,6 +302,11 @@ final class Receiver {
 
     init() {
         installListener()
+        installMonitor()
+    }
+
+    func reinstallMonitor() {
+        if let flagMonitor { NSEvent.removeMonitor(flagMonitor) }
         installMonitor()
     }
 

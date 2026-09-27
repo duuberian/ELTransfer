@@ -23,10 +23,13 @@ struct SettingsView: View {
             card {
                 sectionTitle("Permissions")
                 permissionRow("Accessibility", granted: status.accessibilityGranted,
-                              pane: "Privacy_Accessibility")
+                              pane: "Privacy_Accessibility") {
+                    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+                    _ = AXIsProcessTrustedWithOptions(options as CFDictionary)
+                }
                 Divider().overlay(ELStyle.line)
                 permissionRow("Input Monitoring", granted: status.inputMonitoringGranted,
-                              pane: "Privacy_ListenEvent")
+                              pane: "Privacy_ListenEvent") { _ = CGRequestListenEventAccess() }
             }
 
             card {
@@ -93,7 +96,10 @@ struct SettingsView: View {
             .foregroundStyle(ELStyle.muted)
     }
 
-    private func permissionRow(_ name: String, granted: Bool, pane: String) -> some View {
+    /// `register` asks macOS for the permission first, so ELTransfer is already listed
+    /// in the pane (even after its entry was removed) and the user only flips the switch.
+    private func permissionRow(_ name: String, granted: Bool, pane: String,
+                               register: @escaping () -> Void) -> some View {
         HStack {
             Image(systemName: granted ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                 .foregroundStyle(granted ? Color.green : Color.orange)
@@ -103,6 +109,7 @@ struct SettingsView: View {
                 Text("Allowed").font(.system(size: 12)).foregroundStyle(ELStyle.muted)
             } else {
                 Button("Open Settings…") {
+                    register()
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
                         NSWorkspace.shared.open(url)
                     }
