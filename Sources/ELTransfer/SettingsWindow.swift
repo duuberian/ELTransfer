@@ -130,6 +130,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     var isVisible: Bool { window?.isVisible == true }
 
+    func close() {
+        window?.close()
+    }
+
     func show() {
         if window == nil {
             let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable, .fullSizeContentView],

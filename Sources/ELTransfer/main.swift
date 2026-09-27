@@ -49,11 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var sender: Sender?
     var receiver: Receiver?
     private var isConfigured = false
+    private var isOpen = false
     private let status = MenuStatus()
     private lazy var settingsWindow = SettingsWindowController(status: status)
     private lazy var menuPanel = MenuPanelController(status: status) { [weak self] in self?.openSettings() }
     private var statusTimer: Timer?
     private var permissionTimer: Timer?
+    private var permissionsWereMissing = false
     private var cancellables: Set<AnyCancellable> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -75,18 +77,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor private func finishLaunching() {
-        requestSystemPermissions()
         settingsWindow.onVisibilityChange = { [weak self] _ in self?.updateStatusTimer() }
         observeUpdates()
         AppUpdater.shared.start()
+        watchPermissions()
+        if requestSystemPermissions() {
+            openApp()
+        } else {
+            // Permissions come first: event monitors only work in a process started after
+            // access was granted, so the app opens once both are allowed and it relaunches.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.showPermissions() }
+        }
+    }
+
+    private func openApp() {
+        guard !isOpen else { return }
+        isOpen = true
+        configureServices()
         // Drop the menu down on launch so it is clear ELTransfer lives in the menu bar.
         // Wait a beat for the status item to be placed.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.showMenu() }
     }
 
+    private func showPermissions() {
+        menuPanel.hide()
+        refreshStatus()
+        settingsWindow.show()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        // Opening the app again (Finder, Spotlight, Dock) points back at the menu bar.
-        showMenu()
+        // Opening the app again (Finder, Spotlight, Dock) points back at the menu bar,
+        // or at the permissions until they are granted.
+        if isOpen { showMenu() } else { showPermissions() }
         return false
     }
 
@@ -112,7 +134,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
-    private func requestSystemPermissions() {
+    /// Returns whether both permissions are already granted.
+    private func requestSystemPermissions() -> Bool {
         statusItem.button?.title = "⚠️"
 
         // Ask Accessibility first. This opens System Settings if access is not already granted.
@@ -127,10 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updatePermissionBadge()
         print("ELTransfer: permissions - accessibility=\(accessibilityTrusted), inputMonitoring=\(eventListeningAllowed)")
         print("ELTransfer: if macOS did not prompt, enable ELTransfer in System Settings > Privacy & Security > Accessibility and Input Monitoring.")
-
-        // Services start immediately; they become fully useful once the user grants the prompts.
-        configureServices()
-        watchPermissions()
+        permissionsWereMissing = !status.permissionsGranted
+        return status.permissionsGranted
     }
 
     private func updatePermissionBadge() {
@@ -138,23 +159,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Grants made in System Settings arrive while the app runs. Poll both permissions,
-    /// and when one is newly granted reinstall the event monitors, which macOS does not
-    /// start delivering to monitors added before access was allowed.
+    /// and once both are granted after one was missing, relaunch: Input Monitoring only
+    /// reaches a process started after it was allowed.
     private func watchPermissions() {
         permissionTimer?.invalidate()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let hadAccessibility = status.accessibilityGranted
-            let hadInputMonitoring = status.inputMonitoringGranted
             refreshStatus()
-            let gained = (!hadAccessibility && status.accessibilityGranted)
-                || (!hadInputMonitoring && status.inputMonitoringGranted)
-            if gained {
-                print("ELTransfer: permissions - accessibility=\(status.accessibilityGranted), inputMonitoring=\(status.inputMonitoringGranted)")
-                sender?.reinstallMonitors()
-                receiver?.reinstallMonitor()
-            }
             updatePermissionBadge()
+            // Tracked apart from status, which the menu and settings also refresh.
+            guard status.permissionsGranted else { permissionsWereMissing = true; return }
+            guard permissionsWereMissing else { return }
+            permissionsWereMissing = false
+            print("ELTransfer: permissions granted, relaunching")
+            Task { @MainActor in
+                do {
+                    try await AccessibilityRecovery.restart()
+                } catch {
+                    // Development builds cannot relaunch; start listening in place.
+                    self.sender?.reinstallMonitors()
+                    self.receiver?.reinstallMonitor()
+                    self.settingsWindow.close()
+                    self.openApp()
+                }
+            }
         }
     }
 
