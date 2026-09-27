@@ -87,14 +87,21 @@ final class CursorSettings: ObservableObject {
     }
 }
 
-/// Pointer arrow like Lucide's mouse-pointer-2: mirror-symmetric about the 45° diagonal
-/// from its tip, which sits at the rect's top-left.
+/// Pointer arrow like Lucide's mouse-pointer-2, mirror-symmetric about its axis, turned
+/// so its left edge is vertical like a system pointer; the tip sits at the rect's top-left.
 struct ArrowShape: Shape {
-    /// Tip, wing, notch, wing; the notch lies on the diagonal and the wings mirror each other.
-    private static let outline = [CGPoint(x: 0, y: 0), CGPoint(x: 16.6, y: 6.6),
-                                  CGPoint(x: 9.7, y: 9.7), CGPoint(x: 6.6, y: 16.6)]
+    /// Tip, wing, notch, wing; the notch lies on the axis and the wings mirror each other.
+    private static let outline: [CGPoint] = {
+        let points = [CGPoint(x: 0, y: 0), CGPoint(x: 16.6, y: 6.6), CGPoint(x: 9.7, y: 9.7), CGPoint(x: 6.6, y: 16.6)]
+        // Turn the left wing's edge upright.
+        let upright = CGAffineTransform(rotationAngle: atan2(6.6, 16.6))
+        return points.map { $0.applying(upright) }
+    }()
     /// Width over height of the outline.
-    static let aspect: CGFloat = 1
+    static let aspect: CGFloat = {
+        let xs = outline.map(\.x), ys = outline.map(\.y)
+        return (xs.max()! - xs.min()!) / (ys.max()! - ys.min()!)
+    }()
     var rounded = false
 
     func path(in rect: CGRect) -> Path {
