@@ -87,22 +87,14 @@ final class CursorSettings: ObservableObject {
     }
 }
 
-/// Pointer arrow from the design sketch, made symmetric about its axis and tilted
-/// like a system pointer; the tip sits at the rect's top-left.
+/// Pointer arrow like Lucide's mouse-pointer-2: mirror-symmetric about the 45° diagonal
+/// from its tip, which sits at the rect's top-left.
 struct ArrowShape: Shape {
-    /// Tip, wing, notch, wing, in the sketch's pixels. Both wings are the same length and
-    /// the notch sits on the axis, then the axis leans 30° left of straight down.
-    private static let outline: [CGPoint] = {
-        let wing = CGPoint(x: 84, y: 196), notch: CGFloat = 142
-        let tilt = CGAffineTransform(rotationAngle: -30.4 * .pi / 180)
-        let points = [CGPoint.zero, wing, CGPoint(x: 0, y: notch), CGPoint(x: -wing.x, y: wing.y)]
-        return points.map { $0.applying(tilt) }
-    }()
-    /// Width over height of the tilted outline.
-    static let aspect: CGFloat = {
-        let xs = outline.map(\.x), ys = outline.map(\.y)
-        return (xs.max()! - xs.min()!) / (ys.max()! - ys.min()!)
-    }()
+    /// Tip, wing, notch, wing; the notch lies on the diagonal and the wings mirror each other.
+    private static let outline = [CGPoint(x: 0, y: 0), CGPoint(x: 16.6, y: 6.6),
+                                  CGPoint(x: 9.7, y: 9.7), CGPoint(x: 6.6, y: 16.6)]
+    /// Width over height of the outline.
+    static let aspect: CGFloat = 1
     var rounded = false
 
     func path(in rect: CGRect) -> Path {
@@ -117,7 +109,7 @@ struct ArrowShape: Shape {
             path.move(to: CGPoint(x: (last.x + corners[0].x) / 2, y: (last.y + corners[0].y) / 2))
             for index in corners.indices {
                 path.addArc(tangent1End: corners[index], tangent2End: corners[(index + 1) % corners.count],
-                            radius: 15)
+                            radius: 1.2)
             }
         } else {
             path.addLines(corners)
