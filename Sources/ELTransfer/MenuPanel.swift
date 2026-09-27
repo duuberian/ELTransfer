@@ -119,47 +119,117 @@ private final class TransparentHostingView<Content: View>: NSHostingView<Content
     override var isOpaque: Bool { false }
 }
 
+/// Drives the panel's entrance and exit. The window stays ordered in until the exit finishes.
+final class MenuPresentation: ObservableObject {
+    @Published var isPresented = false
+}
+
+/// Wraps the menu with a drawn shadow and the popover-style transition. The window itself is
+/// shadowless and oversized by `insets` so the shadow and scale animate with the content.
+private struct MenuPanelRoot: View {
+    static let insets = EdgeInsets(top: 4, leading: 24, bottom: 36, trailing: 24)
+    static let hideDuration = 0.18
+
+    @ObservedObject var presentation: MenuPresentation
+    let menu: MenuView
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let shown = presentation.isPresented
+        let settled = shown || reduceMotion
+        menu
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(ELStyle.surface)
+                    .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
+                    .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
+            )
+            .compositingGroup()
+            .scaleEffect(settled ? 1 : 0.94, anchor: .top)
+            .offset(y: settled ? 0 : -10)
+            .opacity(shown ? 1 : 0)
+            .animation(animation(shown: shown), value: shown)
+            .padding(Self.insets)
+    }
+
+    private func animation(shown: Bool) -> Animation {
+        if reduceMotion { return .easeInOut(duration: shown ? 0.2 : Self.hideDuration) }
+        return shown ? .spring(response: 0.38, dampingFraction: 0.82) : .easeOut(duration: Self.hideDuration)
+    }
+}
+
 /// A non-activating panel under the status item, styled like ELWifi's menu.
 final class MenuPanelController {
     private let panel: MenuPanelWindow
+    private let presentation = MenuPresentation()
     private var clickMonitors: [Any] = []
+    private var orderOutWork: DispatchWorkItem?
+    /// Logical open state; the panel can still be on screen while its exit animation runs.
+    private(set) var isVisible = false
 
     init(status: MenuStatus) {
         panel = MenuPanelWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                                 backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.level = .popUpMenu
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        let host = TransparentHostingView(rootView: MenuView(status: status) { NSApp.terminate(nil) })
+        let menu = MenuView(status: status) { NSApp.terminate(nil) }
+        let host = TransparentHostingView(rootView: MenuPanelRoot(presentation: presentation, menu: menu))
         host.setFrameSize(host.fittingSize)
         panel.contentView = host
         panel.setContentSize(host.fittingSize)
     }
 
-    var isVisible: Bool { panel.isVisible }
-
     func show(below button: NSStatusBarButton) {
         guard let window = button.window else { return }
+        orderOutWork?.cancel()
+        orderOutWork = nil
+        isVisible = true
+
+        let insets = MenuPanelRoot.insets
         let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
         let size = panel.contentView?.fittingSize ?? panel.frame.size
+        let menuWidth = size.width - insets.leading - insets.trailing
         let screen = window.screen ?? NSScreen.main
-        var x = anchor.midX - size.width / 2
+        var x = anchor.midX - menuWidth / 2
         if let visible = screen?.visibleFrame {
-            x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
+            x = min(max(x, visible.minX + 8), visible.maxX - menuWidth - 8)
         }
-        panel.setFrame(NSRect(x: x, y: anchor.minY - size.height - 6, width: size.width, height: size.height), display: true)
+        let top = anchor.minY - 6 + insets.top
+        panel.setFrame(NSRect(x: x - insets.leading, y: top - size.height, width: size.width, height: size.height), display: true)
+
+        let wasOnScreen = panel.isVisible
+        panel.ignoresMouseEvents = false
         panel.makeKeyAndOrderFront(nil)
         startDismissMonitors(ignoring: button)
+        if wasOnScreen {
+            // Reopened mid-exit: reverse from the current in-flight state.
+            presentation.isPresented = true
+        } else {
+            // Let the collapsed state reach the screen once so the entrance actually animates.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, isVisible else { return }
+                presentation.isPresented = true
+            }
+        }
     }
 
     func hide() {
-        panel.orderOut(nil)
+        guard isVisible else { return }
+        isVisible = false
         clickMonitors.forEach(NSEvent.removeMonitor)
         clickMonitors.removeAll()
+        panel.ignoresMouseEvents = true
+        presentation.isPresented = false
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, !isVisible else { return }
+            panel.orderOut(nil)
+        }
+        orderOutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + MenuPanelRoot.hideDuration + 0.02, execute: work)
     }
-
     private func startDismissMonitors(ignoring button: NSStatusBarButton) {
         guard clickMonitors.isEmpty else { return }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in

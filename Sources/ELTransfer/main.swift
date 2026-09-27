@@ -191,6 +191,7 @@ final class Receiver {
     private var flagMonitor: Any?
     private var lastPacket = PointerPacket(x: 0.5, y: 0.5, width: 1, height: 1, active: false)
     private var lastUpdate = Date.distantPast
+    private var staleCheck: DispatchWorkItem?
 
     init() {
         installListener()
@@ -206,6 +207,7 @@ final class Receiver {
     private func refreshConsent() {
         // User consent gesture: receiver also holds Command.
         isReceiving = NSEvent.modifierFlags.contains(.command)
+        updateOverlay()
     }
 
     private func installListener() {
@@ -231,80 +233,150 @@ final class Receiver {
             self.lastPacket = packet
             self.lastUpdate = Date()
             self.updateOverlay()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.updateOverlay()
-            }
+            // Re-check once the packet goes stale so the pointer fades if the stream stops.
+            self.staleCheck?.cancel()
+            let check = DispatchWorkItem { [weak self] in self?.updateOverlay() }
+            self.staleCheck = check
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: check)
         }
     }
 
     private func updateOverlay() {
         let active = isReceiving && lastPacket.active && Date().timeIntervalSince(lastUpdate) < 0.45
-        if overlay == nil { overlay = OverlayWindow() }
+        if overlay == nil {
+            guard active else { return }
+            overlay = OverlayWindow()
+        }
         overlay?.show(packet: lastPacket, active: active)
     }
 }
 
+/// Pointer state rendered by `PointerView`. Packets mutate this and SwiftUI animates between
+/// values, so the overlay window itself never moves per packet.
+final class PointerOverlayModel: ObservableObject {
+    /// Arrow tip, or shape centre, in the overlay's top-left-origin coordinates.
+    @Published var point = CGPoint.zero
+    @Published var active = false
+    @Published var color = CursorSettings.shared.color
+    @Published var shape = CursorSettings.shared.shape
+    /// Set for the update that places a pointer reappearing after its fade-out, so it
+    /// settles in place instead of gliding over from where it vanished.
+    @Published var snap = true
+}
+
+enum OverlayWindowTiming {
+    static let fadeOut = 0.28
+}
+
+/// A click-through, screen-sized overlay that hosts the remote pointer.
 final class OverlayWindow: NSWindow {
+    private let model = PointerOverlayModel()
+    private var target: (packet: PointerPacket, active: Bool)?
+    private var applyScheduled = false
+    private var inactiveSince = Date.distantPast
+    private var orderOutWork: DispatchWorkItem?
+
     init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+        super.init(contentRect: NSScreen.main?.frame ?? .zero,
                    styleMask: [.borderless], backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
         level = .screenSaver
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         ignoresMouseEvents = true
         hasShadow = false
+        isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: PointerView(model: model))
+        host.sizingOptions = []
+        contentView = host
     }
 
     func show(packet: PointerPacket, active: Bool) {
-        guard let screen = NSScreen.main else { return }
-        let frame = screen.frame
-        // Aspect-preserving mapping keeps horizontal/vertical cursor speed proportional.
-        let sourceAspect = packet.width / packet.height
-        let destinationAspect = frame.width / frame.height
-        let x = packet.x
-        if sourceAspect != destinationAspect && destinationAspect > 0 {
-            let sourceHeight = packet.width / destinationAspect
-            let yOffset = (sourceHeight - packet.height) / 2
-            _ = yOffset // Retain simple screen-relative mapping in prototype.
+        target = (packet, active)
+        if active && !isVisible {
+            // Put the faded-out view on screen first so the entrance animates from it.
+            orderFrontRegardless()
+            guard !applyScheduled else { return }
+            applyScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                self?.applyScheduled = false
+                self?.applyTarget()
+            }
+        } else if !applyScheduled {
+            applyTarget()
         }
-        let px = frame.minX + x * frame.width
-        let py = frame.minY + packet.y * frame.height
+    }
+
+    private func applyTarget() {
+        guard let (packet, active) = target, let screen = NSScreen.main else { return }
+        let wasActive = model.active
+        guard active else {
+            guard wasActive else { return }
+            // Keep the last position and let the view fade; order out once it is invisible.
+            model.active = false
+            inactiveSince = Date()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !model.active else { return }
+                orderOut(nil)
+            }
+            orderOutWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + OverlayWindowTiming.fadeOut + 0.05, execute: work)
+            return
+        }
+
+        orderOutWork?.cancel()
+        orderOutWork = nil
+        let frame = screen.frame
+        let screenChanged = self.frame != frame
+        if screenChanged { setFrame(frame, display: false) }
+        if !isVisible { orderFrontRegardless() }
+
+        let point = CGPoint(x: packet.x * frame.width, y: (1 - packet.y) * frame.height)
+        let reappearing = !wasActive && Date().timeIntervalSince(inactiveSince) > OverlayWindowTiming.fadeOut
+        let snap = screenChanged || reappearing
+        if model.snap != snap { model.snap = snap }
+        if model.point != point { model.point = point }
         let color = packet.color ?? CursorSettings.shared.color
         let shape = packet.shape ?? CursorSettings.shared.shape
-        let size: CGFloat = active ? 44 : 34
-        let inset: CGFloat = 3
-        let origin: NSPoint
-        if shape == .arrow {
-            // The arrow's tip marks the pointer position.
-            origin = NSPoint(x: px - inset, y: py + inset - size)
-        } else {
-            origin = NSPoint(x: px - size / 2, y: py - size / 2)
-        }
-        setFrame(NSRect(origin: origin, size: NSSize(width: size, height: size)), display: true)
-        let view = PointerView(color: color, shape: shape, active: active, inset: inset)
-        if let host = contentView as? NSHostingView<PointerView> {
-            host.rootView = view
-        } else {
-            contentView = NSHostingView(rootView: view)
-        }
-        orderFrontRegardless()
+        if model.color != color { model.color = color }
+        if model.shape != shape { model.shape = shape }
+        if !wasActive { model.active = true }
     }
 }
 
 struct PointerView: View {
-    let color: CursorColor
-    let shape: CursorShape
-    let active: Bool
-    let inset: CGFloat
+    @ObservedObject var model: PointerOverlayModel
+    private let glyphSize: CGFloat = 38
 
     var body: some View {
-        CursorGlyph(color: color, shape: shape, lineWidth: 2.5)
-            .padding(inset)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .opacity(active ? 1 : 0.45)
+        let active = model.active
+        let arrow = model.shape == .arrow
+        // Scaling around the tip (arrow) or centre keeps the transmitted point fixed.
+        let anchor: UnitPoint = arrow ? .topLeading : .center
+        let origin = arrow ? model.point
+            : CGPoint(x: model.point.x - glyphSize / 2, y: model.point.y - glyphSize / 2)
+
+        CursorGlyph(color: model.color, shape: model.shape, lineWidth: 2.5)
+            .frame(width: glyphSize, height: glyphSize)
+            .background(
+                Circle()
+                    .fill(model.color.fill)
+                    .frame(width: glyphSize * 1.3, height: glyphSize * 1.3)
+                    .blur(radius: 10)
+                    .offset(x: arrow ? -glyphSize * 0.12 : 0)
+                    .opacity(active ? 0.55 : 0)
+            )
+            .animation(.easeOut(duration: 0.15), value: model.color)
             .saturation(active ? 1 : 0.2)
-            .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+            .shadow(color: .black.opacity(active ? 0.28 : 0.08), radius: active ? 5 : 1.5, y: active ? 2.5 : 1)
+            .scaleEffect(active ? 1 : 0.78, anchor: anchor)
+            .opacity(active ? 1 : 0)
+            .animation(active ? .spring(response: 0.32, dampingFraction: 0.82)
+                              : .easeOut(duration: OverlayWindowTiming.fadeOut), value: active)
+            .offset(x: origin.x, y: origin.y)
+            .animation(model.snap ? nil : .interactiveSpring(response: 0.14, dampingFraction: 0.86), value: model.point)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .allowsHitTesting(false)
     }
 }
 
