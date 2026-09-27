@@ -19,12 +19,22 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          # Build numbers come from the commit count.
+          fetch-depth: 0
 
       - name: Build app and DMG
         run: |
           chmod +x scripts/*.sh
           ./scripts/build-app.sh
           ./scripts/build-dmg.sh
+
+      - name: Sign update archive and feed
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          test -n "$SPARKLE_PRIVATE_KEY"
+          ./scripts/build-update.sh
 
       - name: Configure website deploy key
         env:

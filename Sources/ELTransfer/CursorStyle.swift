@@ -50,8 +50,30 @@ enum CursorColor: String, CaseIterable, Codable, Identifiable {
 }
 
 enum CursorShape: String, CaseIterable, Codable, Identifiable {
-    case arrow, circle, square
+    case circle, rounded, square
     var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .circle: "Circle"
+        case .rounded: "Rounded Square"
+        case .square: "Square"
+        }
+    }
+
+    /// Corner radius as a fraction of the glyph's side.
+    var cornerFraction: CGFloat {
+        switch self {
+        case .circle: 0.5
+        case .rounded: 0.24
+        case .square: 0
+        }
+    }
+
+    // Older builds sent "arrow"; fall back rather than dropping their packets.
+    init(from decoder: Decoder) throws {
+        self = CursorShape(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .circle
+    }
 }
 
 /// The receiver's pointer look, remembered between launches and sent with each packet.
@@ -68,24 +90,7 @@ final class CursorSettings: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         color = defaults.string(forKey: "cursorColor").flatMap(CursorColor.init) ?? .red
-        shape = defaults.string(forKey: "cursorShape").flatMap(CursorShape.init) ?? .arrow
-    }
-}
-
-/// Pointer arrow traced from the design sketch; the tip sits at the rect's top-left.
-struct ArrowShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        // Keep the sketch's proportions and pin the tip to the top-left corner.
-        let height = min(rect.height, rect.width * 218 / 165)
-        let width = height * 165 / 218
-        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + x * width, y: rect.minY + y * height) }
-        var path = Path()
-        path.move(to: p(0, 0))
-        path.addLine(to: p(1, 0.555))
-        path.addLine(to: p(0.40, 0.58))
-        path.addLine(to: p(0.16, 1))
-        path.closeSubpath()
-        return path
+        shape = defaults.string(forKey: "cursorShape").flatMap(CursorShape.init) ?? .circle
     }
 }
 
@@ -93,17 +98,15 @@ struct CursorGlyph: View {
     let color: CursorColor
     let shape: CursorShape
     var lineWidth: CGFloat = 3
+    var filled = true
 
     var body: some View {
-        switch shape {
-        case .arrow:
-            ArrowShape().fill(color.fill)
-                .overlay(ArrowShape().stroke(color.stroke, style: StrokeStyle(lineWidth: lineWidth, lineJoin: .round)))
-        case .circle:
-            Circle().fill(color.fill).overlay(Circle().strokeBorder(color.stroke, lineWidth: lineWidth))
-        case .square:
-            RoundedRectangle(cornerRadius: lineWidth * 1.5).fill(color.fill)
-                .overlay(RoundedRectangle(cornerRadius: lineWidth * 1.5).strokeBorder(color.stroke, lineWidth: lineWidth))
+        GeometryReader { geo in
+            let radius = min(geo.size.width, geo.size.height) * shape.cornerFraction
+            let outline = RoundedRectangle(cornerRadius: radius)
+            outline.fill(filled ? color.fill : .clear)
+                .overlay(outline.strokeBorder(color.stroke, lineWidth: lineWidth))
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: shape)
         }
     }
 }

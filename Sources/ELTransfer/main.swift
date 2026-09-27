@@ -318,7 +318,7 @@ final class Receiver {
 /// Pointer state rendered by `PointerView`. Packets mutate this and SwiftUI animates between
 /// values, so the overlay window itself never moves per packet.
 final class PointerOverlayModel: ObservableObject {
-    /// Arrow tip, or shape centre, in the overlay's top-left-origin coordinates.
+    /// Shape centre in the overlay's top-left-origin coordinates.
     @Published var point = CGPoint.zero
     @Published var active = false
     @Published var color = CursorSettings.shared.color
@@ -414,11 +414,8 @@ struct PointerView: View {
 
     var body: some View {
         let active = model.active
-        let arrow = model.shape == .arrow
-        // Scaling around the tip (arrow) or centre keeps the transmitted point fixed.
-        let anchor: UnitPoint = arrow ? .topLeading : .center
-        let origin = arrow ? model.point
-            : CGPoint(x: model.point.x - glyphSize / 2, y: model.point.y - glyphSize / 2)
+        // Scaling around the centre keeps the transmitted point fixed.
+        let origin = CGPoint(x: model.point.x - glyphSize / 2, y: model.point.y - glyphSize / 2)
 
         CursorGlyph(color: model.color, shape: model.shape, lineWidth: 2.5)
             .frame(width: glyphSize, height: glyphSize)
@@ -427,13 +424,12 @@ struct PointerView: View {
                     .fill(model.color.fill)
                     .frame(width: glyphSize * 1.3, height: glyphSize * 1.3)
                     .blur(radius: 10)
-                    .offset(x: arrow ? -glyphSize * 0.12 : 0)
                     .opacity(active ? 0.55 : 0)
             )
             .animation(.easeOut(duration: 0.15), value: model.color)
             .saturation(active ? 1 : 0.2)
             .shadow(color: .black.opacity(active ? 0.28 : 0.08), radius: active ? 5 : 1.5, y: active ? 2.5 : 1)
-            .scaleEffect(active ? 1 : 0.78, anchor: anchor)
+            .scaleEffect(active ? 1 : 0.78, anchor: .center)
             .opacity(active ? 1 : 0)
             .animation(active ? .spring(response: 0.32, dampingFraction: 0.82)
                               : .easeOut(duration: OverlayWindowTiming.fadeOut), value: active)

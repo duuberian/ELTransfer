@@ -7,10 +7,18 @@
   <key>CFBundleIdentifier</key><string>com.duuberian.ELTransfer</string>
   <key>CFBundleName</key><string>ELTransfer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.3</string>
+  <key>CFBundleShortVersionString</key><string>0.1.4</string>
   <key>CFBundleVersion</key><string>3</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>SUFeedURL</key><string>https://duuberian.com/eltransfer/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>8VxDp78uLHuX3AnJU8m9iKoHcha/VscOvsF95GrSaGI=</string>
+  <key>SUEnableAutomaticChecks</key><false/>
+  <key>SUAutomaticallyUpdate</key><false/>
+  <key>SUAllowsAutomaticUpdates</key><false/>
+  <key>SUVerifyUpdateBeforeExtraction</key><true/>
+  <key>SURequireSignedFeed</key><true/>
+  <key>SUEnableSystemProfiling</key><false/>
   <key>NSHumanReadableCopyright</key><string>© 2026 EL. Prototype.</string>
 </dict>
 </plist>

@@ -28,7 +28,7 @@ struct MenuView: View {
     var body: some View {
         VStack(spacing: 18) {
             CursorGlyph(color: settings.color, shape: settings.shape, lineWidth: 3)
-                .frame(width: settings.shape == .arrow ? 96 : 84, height: settings.shape == .arrow ? 120 : 84)
+                .frame(width: 84, height: 84)
                 .frame(height: 132)
                 .padding(.top, 12)
                 .animation(.spring(response: 0.3, dampingFraction: 0.75), value: settings.shape)
@@ -56,16 +56,16 @@ struct MenuView: View {
             HStack(spacing: 6) {
                 ForEach(CursorShape.allCases) { shape in
                     Button { settings.shape = shape } label: {
-                        CursorGlyph(color: settings.color, shape: shape, lineWidth: 2)
-                            .frame(width: shape == .arrow ? 20 : 24, height: shape == .arrow ? 26 : 24)
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                        CursorGlyph(color: settings.color, shape: shape, lineWidth: 2, filled: false)
+                            .frame(width: 30, height: 30)
+                            .frame(maxWidth: .infinity, minHeight: 50)
                             .background(settings.shape == shape ? ELStyle.selected : .clear,
                                         in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(shape.rawValue.capitalized)
-                    .accessibilityLabel(shape.rawValue.capitalized)
+                    .help(shape.label)
+                    .accessibilityLabel(shape.label)
                 }
             }
             .padding(5)
