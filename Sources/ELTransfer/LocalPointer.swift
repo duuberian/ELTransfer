@@ -17,10 +17,16 @@ final class LocalPointer {
     private var hovered: Set<String> = []
     private var timer: Timer?
     private var cursors: [String: NSCursor] = [:]
-    private var current: NSCursor?
     private var cancellables: Set<AnyCancellable> = []
 
     private init() {
+        allowCursorInBackground()
+        // Switching apps (⌘-Tab) lets the new front app reset the cursor; take it back.
+        for name in [NSApplication.didResignActiveNotification, NSApplication.didBecomeActiveNotification] {
+            NotificationCenter.default.publisher(for: name)
+                .sink { [weak self] _ in self?.apply() }
+                .store(in: &cancellables)
+        }
         // A new look replaces every cached image.
         CursorSettings.shared.$color.combineLatest(CursorSettings.shared.$shape)
             .dropFirst()
@@ -54,7 +60,6 @@ final class LocalPointer {
     private func end() {
         timer?.invalidate()
         timer = nil
-        current = nil
         NSCursor.arrow.set()
     }
 
@@ -79,17 +84,30 @@ final class LocalPointer {
         swing.record(CGPoint(x: mouse.x, y: -mouse.y), snap: false)
     }
 
-    /// Sets the cursor for the current swing angle, reasserting it each frame because
-    /// hosted views reset the cursor as the mouse crosses them.
+    /// Sets the cursor for the current swing angle. It is reasserted every frame: hosted
+    /// views reset it as the mouse crosses them, and so does whichever app is in front,
+    /// which this process cannot observe.
     private func apply() {
         guard !hovered.isEmpty else { return }
         let shape = CursorSettings.shared.shape
         let angle = shape.isPointer ? swing.angle(at: Date.timeIntervalSinceReferenceDate) : 0
         let cursor = cursor(color: CursorSettings.shared.color, shape: shape, degrees: Int(angle.rounded()))
-        if current !== cursor || NSCursor.current !== cursor {
-            current = cursor
-            cursor.set()
-        }
+        cursor.set()
+    }
+
+    /// macOS normally lets only the frontmost app set the cursor, so the menu (which never
+    /// activates ELTransfer) or a window left behind by ⌘-Tab would show the system arrow.
+    /// This window-server connection property lifts that. It is private, so it is looked up
+    /// at runtime; if it is missing the pointer simply shows only while ELTransfer is active.
+    private func allowCursorInBackground() {
+        typealias DefaultConnection = @convention(c) () -> Int32
+        typealias SetProperty = @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
+        guard let handle = dlopen(nil, RTLD_NOW),
+              let connectionSymbol = dlsym(handle, "_CGSDefaultConnection"),
+              let setSymbol = dlsym(handle, "CGSSetConnectionProperty") else { return }
+        let connection = unsafeBitCast(connectionSymbol, to: DefaultConnection.self)()
+        let setProperty = unsafeBitCast(setSymbol, to: SetProperty.self)
+        _ = setProperty(connection, connection, "SetsCursorInBackground" as CFString, kCFBooleanTrue)
     }
 
     private func cursor(color: CursorColor, shape: CursorShape, degrees: Int) -> NSCursor {
