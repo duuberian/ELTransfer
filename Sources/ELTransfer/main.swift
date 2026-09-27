@@ -487,14 +487,22 @@ final class OverlayWindow: NSWindow {
 struct PointerView: View {
     @ObservedObject var model: PointerOverlayModel
     private let glyphSize: CGFloat = 38
+    private let lineWidth: CGFloat = 2.5
 
     var body: some View {
         let active = model.active
-        // Scaling around the centre keeps the transmitted point fixed.
-        let origin = CGPoint(x: model.point.x - glyphSize / 2, y: model.point.y - glyphSize / 2)
+        let pointer = model.shape.isPointer
+        let size = pointer ? CGSize(width: glyphSize * ArrowShape.aspect, height: glyphSize)
+                           : CGSize(width: glyphSize, height: glyphSize)
+        // The pointer's tip, or the circle's centre, sits on the transmitted point,
+        // and scaling around it keeps that point fixed.
+        let anchor: UnitPoint = pointer ? .topLeading : .center
+        let origin = pointer
+            ? CGPoint(x: model.point.x - lineWidth / 2, y: model.point.y - lineWidth / 2)
+            : CGPoint(x: model.point.x - glyphSize / 2, y: model.point.y - glyphSize / 2)
 
-        CursorGlyph(color: model.color, shape: model.shape, lineWidth: 2.5)
-            .frame(width: glyphSize, height: glyphSize)
+        CursorGlyph(color: model.color, shape: model.shape, lineWidth: lineWidth)
+            .frame(width: size.width, height: size.height)
             .background(
                 Circle()
                     .fill(model.color.fill)
@@ -505,7 +513,7 @@ struct PointerView: View {
             .animation(.easeOut(duration: 0.15), value: model.color)
             .saturation(active ? 1 : 0.2)
             .shadow(color: .black.opacity(active ? 0.28 : 0.08), radius: active ? 5 : 1.5, y: active ? 2.5 : 1)
-            .scaleEffect(active ? 1 : 0.78, anchor: .center)
+            .scaleEffect(active ? 1 : 0.78, anchor: anchor)
             .opacity(active ? 1 : 0)
             .animation(active ? .spring(response: 0.32, dampingFraction: 0.82)
                               : .easeOut(duration: OverlayWindowTiming.fadeOut), value: active)

@@ -50,27 +50,20 @@ enum CursorColor: String, CaseIterable, Codable, Identifiable {
 }
 
 enum CursorShape: String, CaseIterable, Codable, Identifiable {
-    case circle, rounded, square
+    case circle, rounded, arrow
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .circle: "Circle"
-        case .rounded: "Rounded Square"
-        case .square: "Square"
+        case .rounded: "Rounded Pointer"
+        case .arrow: "Pointer"
         }
     }
 
-    /// Corner radius as a fraction of the glyph's side.
-    var cornerFraction: CGFloat {
-        switch self {
-        case .circle: 0.5
-        case .rounded: 0.24
-        case .square: 0
-        }
-    }
+    var isPointer: Bool { self != .circle }
 
-    // Older builds sent "arrow"; fall back rather than dropping their packets.
+    // Unknown values from other builds fall back rather than dropping their packets.
     init(from decoder: Decoder) throws {
         self = CursorShape(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .circle
     }
@@ -94,6 +87,39 @@ final class CursorSettings: ObservableObject {
     }
 }
 
+/// Pointer arrow traced from the design sketch; the tip sits at the rect's top-left.
+struct ArrowShape: Shape {
+    /// Width over height of the sketch.
+    static let aspect: CGFloat = 166 / 218
+    var rounded = false
+
+    func path(in rect: CGRect) -> Path {
+        // Keep the sketch's proportions and pin the tip to the top-left corner.
+        let height = min(rect.height, rect.width / Self.aspect)
+        let width = height * Self.aspect
+        let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0.56), CGPoint(x: 0.404, y: 0.582), CGPoint(x: 0.163, y: 1)]
+            .map { CGPoint(x: $0.x * Self.aspect, y: $0.y) }
+        var path = Path()
+        if rounded {
+            // Start midway along the last edge so every corner, the tip included, is rounded.
+            let last = corners[corners.count - 1]
+            path.move(to: CGPoint(x: (last.x + corners[0].x) / 2, y: (last.y + corners[0].y) / 2))
+            for index in corners.indices {
+                path.addArc(tangent1End: corners[index], tangent2End: corners[(index + 1) % corners.count],
+                            radius: 0.07)
+            }
+        } else {
+            path.addLines(corners)
+        }
+        path.closeSubpath()
+        // Rounding trims the sharp tips; stretch the outline back to the sketch's full size.
+        let bounds = path.boundingRect
+        return path.applying(CGAffineTransform(translationX: -bounds.minX, y: -bounds.minY)
+            .concatenating(CGAffineTransform(scaleX: width / bounds.width, y: height / bounds.height))
+            .concatenating(CGAffineTransform(translationX: rect.minX, y: rect.minY)))
+    }
+}
+
 struct CursorGlyph: View {
     let color: CursorColor
     let shape: CursorShape
@@ -101,12 +127,18 @@ struct CursorGlyph: View {
     var filled = true
 
     var body: some View {
-        GeometryReader { geo in
-            let radius = min(geo.size.width, geo.size.height) * shape.cornerFraction
-            let outline = RoundedRectangle(cornerRadius: radius)
-            outline.fill(filled ? color.fill : .clear)
-                .overlay(outline.strokeBorder(color.stroke, lineWidth: lineWidth))
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: shape)
+        switch shape {
+        case .circle:
+            Circle().fill(filled ? color.fill : .clear)
+                .overlay(Circle().strokeBorder(color.stroke, lineWidth: lineWidth))
+        case .rounded, .arrow:
+            let arrow = ArrowShape(rounded: shape == .rounded)
+            let join: CGLineJoin = shape == .rounded ? .round : .miter
+            // Inset by half the stroke so the outline stays inside the frame.
+            arrow.fill(filled ? color.fill : .clear)
+                .overlay(arrow.stroke(color.stroke, style: StrokeStyle(lineWidth: lineWidth, lineJoin: join, miterLimit: 20)))
+                .padding(lineWidth / 2)
+                .aspectRatio(ArrowShape.aspect, contentMode: .fit)
         }
     }
 }
