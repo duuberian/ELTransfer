@@ -402,6 +402,70 @@ final class PointerOverlayModel: ObservableObject {
     /// Set for the update that places a pointer reappearing after its fade-out, so it
     /// settles in place instead of gliding over from where it vanished.
     @Published var snap = true
+    let swing = PointerSwing()
+}
+
+/// Lets the pointer hang from its tip like a pendulum: moving sideways fast leaves its
+/// tail behind, and it swings back to rest once the pointer slows. The angle is stepped
+/// every display frame from a smoothed velocity, so irregular packet timing never shows.
+final class PointerSwing {
+    /// Tilt for a very fast sideways move, in degrees.
+    private let maxAngle = 30.0
+    /// Speed, in points per second, before the tail starts to trail.
+    private let deadZone = 180.0
+    /// Speed past the dead zone that gives about three quarters of the maximum tilt.
+    private let referenceSpeed = 1600.0
+    /// Natural swing frequency and damping; slightly underdamped for one soft sway back.
+    private let omega = 2 * Double.pi * 2.1
+    private let damping = 0.5
+
+    private var lastPoint: CGPoint?
+    private var lastPacketTime = 0.0
+    private var packetVelocity = 0.0
+    private var velocity = 0.0
+    private var angle = 0.0
+    private var angularVelocity = 0.0
+    private var lastStep: Double?
+
+    func record(_ point: CGPoint, snap: Bool) {
+        let now = Date.timeIntervalSinceReferenceDate
+        if snap { reset() }
+        if let lastPoint, !snap {
+            let dt = now - lastPacketTime
+            // A long gap is a pause, not a slow move.
+            packetVelocity = dt < 0.25 ? Double(point.x - lastPoint.x) / max(dt, 1.0 / 120) : 0
+        }
+        lastPoint = point
+        lastPacketTime = now
+    }
+
+    func reset() {
+        lastPoint = nil
+        packetVelocity = 0
+        velocity = 0
+        angle = 0
+        angularVelocity = 0
+        lastStep = nil
+    }
+
+    /// Advances to `time` and returns the tilt in degrees; positive is clockwise.
+    func angle(at time: Double) -> Double {
+        let elapsed = min(time - (lastStep ?? time), 0.1)
+        lastStep = time
+        // No new packet means the sender's pointer has stopped.
+        let measured = time - lastPacketTime > 0.06 ? 0 : packetVelocity
+        var remaining = elapsed
+        while remaining > 0 {
+            let dt = min(remaining, 1.0 / 240)
+            remaining -= dt
+            velocity += (measured - velocity) * (1 - exp(-dt / 0.07))
+            let speed = max(abs(velocity) - deadZone, 0)
+            let target = maxAngle * tanh(speed / referenceSpeed) * (velocity < 0 ? -1 : 1)
+            angularVelocity += (omega * omega * (target - angle) - 2 * damping * omega * angularVelocity) * dt
+            angle += angularVelocity * dt
+        }
+        return angle
+    }
 }
 
 enum OverlayWindowTiming {
@@ -475,6 +539,7 @@ final class OverlayWindow: NSWindow {
         let reappearing = !wasActive && Date().timeIntervalSince(inactiveSince) > OverlayWindowTiming.fadeOut
         let snap = screenChanged || reappearing
         if model.snap != snap { model.snap = snap }
+        model.swing.record(point, snap: snap)
         if model.point != point { model.point = point }
         let color = packet.color ?? CursorSettings.shared.color
         let shape = packet.shape ?? CursorSettings.shared.shape
@@ -501,7 +566,13 @@ struct PointerView: View {
             ? CGPoint(x: model.point.x - lineWidth / 2, y: model.point.y - lineWidth / 2)
             : CGPoint(x: model.point.x - glyphSize / 2, y: model.point.y - glyphSize / 2)
 
-        CursorGlyph(color: model.color, shape: model.shape, lineWidth: lineWidth)
+        // Swing around the tip, stepped each frame while the pointer is shown.
+        let tip = UnitPoint(x: lineWidth / 2 / size.width, y: lineWidth / 2 / size.height)
+        TimelineView(.animation(paused: !pointer || !active)) { context in
+            CursorGlyph(color: model.color, shape: model.shape, lineWidth: lineWidth)
+                .rotationEffect(.degrees(pointer ? model.swing.angle(at: context.date.timeIntervalSinceReferenceDate) : 0),
+                                anchor: tip)
+        }
             .frame(width: size.width, height: size.height)
             .background(
                 Circle()
