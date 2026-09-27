@@ -209,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshStatus() {
         status.accessibilityGranted = AXIsProcessTrusted()
-        status.inputMonitoringGranted = CGPreflightListenEventAccess()
+        status.inputMonitoringGranted = InputMonitoring.isGranted
         status.sending = sender?.isSending ?? false
         status.receiving = receiver?.isReceiving ?? false
     }

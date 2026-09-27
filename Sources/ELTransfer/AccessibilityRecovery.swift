@@ -1,9 +1,10 @@
 import AppKit
 import CryptoKit
 import Foundation
+import IOKit.hid
 
-/// An update replaces the executable, and macOS can keep a stale Accessibility entry
-/// that shows ELTransfer as enabled while denying it. Reset that entry once per update.
+/// An update replaces the executable, and macOS can keep stale Accessibility and Input
+/// Monitoring entries that show ELTransfer as enabled while denying it. Reset them once per update.
 @MainActor
 enum AccessibilityRecovery {
     nonisolated static let bundleIdentifier = "com.duuberian.ELTransfer"
@@ -30,7 +31,7 @@ enum AccessibilityRecovery {
     /// fingerprint first, so the new process cannot loop.
     static func recoverAfterUpdate() async throws -> Bool {
         guard let executable = Bundle.main.executableURL, isInstalledApp else { return false }
-        guard try await prepare(executable: executable, readTrust: { AXIsProcessTrusted() },
+        guard try await prepare(executable: executable, readTrust: { AXIsProcessTrusted() && InputMonitoring.isGranted },
                                 reset: resetApproval) else { return false }
         try await restart()
         return true
@@ -41,17 +42,19 @@ enum AccessibilityRecovery {
     }
 
     static func resetApproval() async throws {
-        // Scope the reset to this app and this permission; never reset the TCC database.
+        // Scope the reset to this app and these permissions; never reset the TCC database.
         guard isInstalledApp else { throw RecoveryError.notInstalled }
         try await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-            process.arguments = ["reset", "Accessibility", bundleIdentifier]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            try process.run()
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else { throw RecoveryError.resetFailed }
+            for service in ["Accessibility", "ListenEvent"] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+                process.arguments = ["reset", service, bundleIdentifier]
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                try process.run()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else { throw RecoveryError.resetFailed }
+            }
         }.value
     }
 
@@ -68,9 +71,17 @@ enum AccessibilityRecovery {
         var errorDescription: String? {
             switch self {
             case .notInstalled: "Open the installed ELTransfer app in Applications to repair access."
-            case .resetFailed: "macOS could not reset access. In Accessibility Settings, remove ELTransfer with −, then add the app from Applications with +."
-            case .cannotRecordAttempt: "ELTransfer could not save the recovery state, so Accessibility was not reset. Open Accessibility Settings to review access."
+            case .resetFailed: "macOS could not reset access. In Accessibility and Input Monitoring Settings, remove ELTransfer with −, then reopen the app."
+            case .cannotRecordAttempt: "ELTransfer could not save the recovery state, so access was not reset. Open Accessibility and Input Monitoring Settings to review access."
             }
         }
+    }
+}
+
+/// Input Monitoring status straight from IOHID, polled so a grant made in Settings
+/// is seen while ELTransfer runs.
+enum InputMonitoring {
+    static var isGranted: Bool {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
     }
 }
