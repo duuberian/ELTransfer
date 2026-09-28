@@ -244,7 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 final class Sender {
-    private var connection: NWConnection?
+    private var connections: [NWConnection] = []
+    private var browser: NWBrowser?
     private var mouseMonitor: Any?
     private var flagMonitor: Any?
     private(set) var isSending = false
@@ -253,7 +254,7 @@ final class Sender {
     private var lastPoint = CGPoint.zero
 
     init() {
-        connect()
+        startDiscovery()
         installMonitors()
         // Try to catch initial state too.
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -266,12 +267,26 @@ final class Sender {
         installMonitors()
     }
 
-    private func connect() {
-        connection = NWConnection(host: host, port: port, using: .udp)
-        connection?.stateUpdateHandler = { state in
-            print("Sender network: \(state)")
+    /// Finds the receiver on the local network instead of assuming its hostname.
+    private func startDiscovery() {
+        browser = NWBrowser(for: .bonjour(type: "_eltransfer._udp", domain: nil), using: .udp)
+        browser?.browseResultsChangedHandler = { [weak self] results, _ in
+            guard let self else { return }
+            // Connections are kept alive; each result is a nearby receiver instance.
+            let endpoints = Set(results.compactMap(\.endpoint))
+            let stale = connections.filter { !endpoints.contains($0.endpoint) }
+            stale.forEach { $0.cancel() }
+            connections.removeAll { !endpoints.contains($0.endpoint) }
+            for endpoint in endpoints where !connections.contains(where: { $0.endpoint == endpoint }) {
+                let connection = NWConnection(to: endpoint, using: .udp)
+                connection.stateUpdateHandler = { state in
+                    if case .failed(let error) = state { print("Sender network failed: \(error)") }
+                }
+                connection.start(queue: .global())
+                connections.append(connection)
+            }
         }
-        connection?.start(queue: .global())
+        browser?.start(queue: .global())
     }
 
     private func installMonitors() {
@@ -314,8 +329,10 @@ final class Sender {
         var packet = packet
         packet.color = CursorSettings.shared.color
         packet.shape = CursorSettings.shared.shape
-        guard let data = try? JSONEncoder().encode(packet), let connection else { return }
-        connection.send(content: data, completion: .contentProcessed { _ in })
+        guard let data = try? JSONEncoder().encode(packet) else { return }
+        for connection in connections where connection.state == .ready {
+            connection.send(content: data, completion: .contentProcessed { _ in })
+        }
     }
 }
 
@@ -361,6 +378,7 @@ final class Receiver {
                     connection.cancel()
                 }
             }
+            listener?.service = NWListener.Service(name: "ELTransfer", type: "_eltransfer._udp")
             listener?.start(queue: .global())
         } catch {
             print("Receiver listener failed: \(error)")
