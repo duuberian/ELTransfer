@@ -14,6 +14,16 @@ struct PointerPacket: Codable {
     // Optional so packets from older builds still decode.
     var color: CursorColor?
     var shape: CursorShape?
+    var senderID: String?
+    var senderName: String?
+}
+
+/// Identifies this running copy, so a Mac never discovers or draws its own pointer.
+enum LocalPeer {
+    static let id = UUID().uuidString
+    static let name = Host.current().localizedName ?? "A Mac"
+    /// Unique per launch; the browser skips the service carrying this name.
+    static let serviceName = "\(name.prefix(40)) (\(id.prefix(8)))"
 }
 
 /// The two logo strokes, fitted without the tile, as a template image.
@@ -249,8 +259,6 @@ final class Sender {
     private var mouseMonitor: Any?
     private var flagMonitor: Any?
     private(set) var isSending = false
-    private let host = NWEndpoint.Host("ELTransfer.local")
-    private let port: NWEndpoint.Port = 47000
     private var lastPoint = CGPoint.zero
 
     init() {
@@ -273,7 +281,10 @@ final class Sender {
         browser?.browseResultsChangedHandler = { [weak self] results, _ in
             guard let self else { return }
             // Connections are kept alive; each result is a nearby receiver instance.
-            let endpoints = Set(results.compactMap(\.endpoint))
+            let endpoints = Set(results.map(\.endpoint).filter { endpoint in
+                if case .service(let name, _, _, _) = endpoint { return name != LocalPeer.serviceName }
+                return true
+            })
             let stale = connections.filter { !endpoints.contains($0.endpoint) }
             stale.forEach { $0.cancel() }
             connections.removeAll { !endpoints.contains($0.endpoint) }
@@ -282,11 +293,15 @@ final class Sender {
                 connection.stateUpdateHandler = { state in
                     if case .failed(let error) = state { print("Sender network failed: \(error)") }
                 }
-                connection.start(queue: .global())
+                connection.start(queue: .main)
                 connections.append(connection)
             }
         }
-        browser?.start(queue: .global())
+        browser?.stateUpdateHandler = { state in
+            if case .failed(let error) = state { print("Sender discovery failed: \(error)") }
+            if case .waiting(let error) = state { print("Sender discovery waiting: \(error)") }
+        }
+        browser?.start(queue: .main)
     }
 
     private func installMonitors() {
@@ -299,7 +314,9 @@ final class Sender {
     }
 
     private func handleCursor(force: Bool = false) {
-        guard let point = CGEvent(source: nil)?.location else { return }
+        // Cocoa coordinates (bottom-left origin) to match NSScreen frames; the receiver
+        // flips y back for its top-left overlay. CGEvent's top-left point inverted y.
+        let point = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }) ?? NSScreen.main else { return }
         let frame = screen.frame
         let margin = CGFloat(24)
@@ -329,6 +346,8 @@ final class Sender {
         var packet = packet
         packet.color = CursorSettings.shared.color
         packet.shape = CursorSettings.shared.shape
+        packet.senderID = LocalPeer.id
+        packet.senderName = LocalPeer.name
         guard let data = try? JSONEncoder().encode(packet) else { return }
         for connection in connections where connection.state == .ready {
             connection.send(content: data, completion: .contentProcessed { _ in })
@@ -371,22 +390,31 @@ final class Receiver {
         do {
             let parameters = NWParameters.udp
             listener = try NWListener(using: parameters, on: 47000)
-            listener?.newConnectionHandler = { connection in
+            listener?.newConnectionHandler = { [weak self] connection in
                 connection.start(queue: .global())
-                connection.receiveMessage { [weak self] data, _, _, _ in
-                    self?.process(data: data)
-                    connection.cancel()
-                }
+                self?.receive(on: connection)
             }
-            listener?.service = NWListener.Service(name: "ELTransfer", type: "_eltransfer._udp")
+            listener?.stateUpdateHandler = { state in
+                if case .failed(let error) = state { print("Receiver listener failed: \(error)") }
+            }
+            listener?.service = NWListener.Service(name: LocalPeer.serviceName, type: "_eltransfer._udp")
             listener?.start(queue: .global())
         } catch {
             print("Receiver listener failed: \(error)")
         }
     }
 
+    /// A UDP connection carries every datagram from one sender; keep reading until it ends.
+    private func receive(on connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            self?.process(data: data)
+            if error == nil { self?.receive(on: connection) } else { connection.cancel() }
+        }
+    }
+
     private func process(data: Data?) {
-        guard let data, let packet = try? JSONDecoder().decode(PointerPacket.self, from: data) else { return }
+        guard let data, let packet = try? JSONDecoder().decode(PointerPacket.self, from: data),
+              packet.senderID != LocalPeer.id else { return }
         DispatchQueue.main.async {
             self.lastPacket = packet
             self.lastUpdate = Date()
@@ -400,12 +428,15 @@ final class Receiver {
     }
 
     private func updateOverlay() {
-        let active = isReceiving && lastPacket.active && Date().timeIntervalSince(lastUpdate) < 0.45
+        let incoming = lastPacket.active && Date().timeIntervalSince(lastUpdate) < 0.45
+        let active = isReceiving && incoming
+        // A Mac is pushing its pointer but this one has not held ⌘ yet: ask.
+        let request = incoming && !isReceiving ? (lastPacket.senderName ?? "A Mac") : nil
         if overlay == nil {
-            guard active else { return }
+            guard active || request != nil else { return }
             overlay = OverlayWindow()
         }
-        overlay?.show(packet: lastPacket, active: active)
+        overlay?.show(packet: lastPacket, active: active, request: request)
     }
 }
 
@@ -420,6 +451,8 @@ final class PointerOverlayModel: ObservableObject {
     /// Set for the update that places a pointer reappearing after its fade-out, so it
     /// settles in place instead of gliding over from where it vanished.
     @Published var snap = true
+    /// Name of a Mac waiting for this one to hold ⌘ and accept its pointer.
+    @Published var request: String?
     let swing = PointerSwing()
 }
 
@@ -493,7 +526,7 @@ enum OverlayWindowTiming {
 /// A click-through, screen-sized overlay that hosts the remote pointer.
 final class OverlayWindow: NSWindow {
     private let model = PointerOverlayModel()
-    private var target: (packet: PointerPacket, active: Bool)?
+    private var target: (packet: PointerPacket, active: Bool, request: String?)?
     private var applyScheduled = false
     private var inactiveSince = Date.distantPast
     private var orderOutWork: DispatchWorkItem?
@@ -513,9 +546,9 @@ final class OverlayWindow: NSWindow {
         contentView = host
     }
 
-    func show(packet: PointerPacket, active: Bool) {
-        target = (packet, active)
-        if active && !isVisible {
+    func show(packet: PointerPacket, active: Bool, request: String?) {
+        target = (packet, active, request)
+        if (active || request != nil) && !isVisible {
             // Put the faded-out view on screen first so the entrance animates from it.
             orderFrontRegardless()
             guard !applyScheduled else { return }
@@ -530,19 +563,26 @@ final class OverlayWindow: NSWindow {
     }
 
     private func applyTarget() {
-        guard let (packet, active) = target, let screen = NSScreen.main else { return }
+        guard let (packet, active, request) = target, let screen = NSScreen.main else { return }
         let wasActive = model.active
+        if model.request != request {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { model.request = request }
+        }
+        if request != nil {
+            orderOutWork?.cancel()
+            orderOutWork = nil
+            if frame != screen.frame { setFrame(screen.frame, display: false) }
+            if !isVisible { orderFrontRegardless() }
+        }
         guard active else {
-            guard wasActive else { return }
+            if !wasActive {
+                if request == nil { scheduleOrderOut() }
+                return
+            }
             // Keep the last position and let the view fade; order out once it is invisible.
             model.active = false
             inactiveSince = Date()
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, !model.active else { return }
-                orderOut(nil)
-            }
-            orderOutWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + OverlayWindowTiming.fadeOut + 0.05, execute: work)
+            if request == nil { scheduleOrderOut() }
             return
         }
 
@@ -564,6 +604,46 @@ final class OverlayWindow: NSWindow {
         if model.color != color { model.color = color }
         if model.shape != shape { model.shape = shape }
         if !wasActive { model.active = true }
+    }
+
+    /// Orders the window out once the pointer and any request have faded.
+    private func scheduleOrderOut() {
+        guard isVisible, orderOutWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            orderOutWork = nil
+            guard !model.active, model.request == nil else { return }
+            orderOut(nil)
+        }
+        orderOutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + OverlayWindowTiming.fadeOut + 0.05, execute: work)
+    }
+}
+
+/// Asks the person at this Mac to hold ⌘ to let another Mac's pointer in.
+struct PointerRequestBanner: View {
+    let name: String
+    let color: CursorColor
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "cursorarrow.rays")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(color.stroke)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(name) wants to share its pointer")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Hold ⌘ Command to let it in")
+                    .font(.system(size: 12))
+                    .foregroundStyle(ELStyle.muted)
+            }
+        }
+        .foregroundStyle(ELStyle.ink)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .background(ELStyle.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(ELStyle.line))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
     }
 }
 
@@ -609,6 +689,13 @@ struct PointerView: View {
             .offset(x: origin.x, y: origin.y)
             .animation(model.snap ? nil : .interactiveSpring(response: 0.14, dampingFraction: 0.86), value: model.point)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay(alignment: .top) {
+                if let request = model.request {
+                    PointerRequestBanner(name: request, color: model.color)
+                        .padding(.top, 48)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
             .allowsHitTesting(false)
     }
 }

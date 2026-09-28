@@ -22,7 +22,7 @@ A pointer-overlay prototype for two Macs on the same local network. It never mov
 1. Copy/build this folder on both Macs.
 2. Run `build/ELTransfer.app` on both.
 3. Allow Accessibility/Input Monitoring permissions when macOS asks at launch.
-4. Ensure the sender can resolve `ELTransfer.local` on your network. Right now the sender targets `ELTransfer.local`; later this should become automatic Bonjour discovery.
-5. Hold `⌘` on both Macs, then move the sender cursor to a screen edge.
+4. Allow Local Network access when macOS asks; the Macs find each other over Bonjour (`_eltransfer._udp`).
+5. Move the sender cursor to a screen edge while holding `⌘`. The receiver shows a banner asking to hold `⌘`; hold it to see the pointer.
 
 The app prints diagnostic state to Console.app / stderr.

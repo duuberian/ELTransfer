@@ -20,6 +20,9 @@
   <key>SUVerifyUpdateBeforeExtraction</key><true/>
   <key>SURequireSignedFeed</key><true/>
   <key>SUEnableSystemProfiling</key><false/>
+  <!-- Without these, macOS's Local Network privacy blocks Bonjour discovery and UDP. -->
+  <key>NSLocalNetworkUsageDescription</key><string>ELTransfer finds nearby Macs on your network to share your pointer with them.</string>
+  <key>NSBonjourServices</key><array><string>_eltransfer._udp</string></array>
   <key>NSHumanReadableCopyright</key><string>© 2026 EL. Prototype.</string>
 </dict>
 </plist>
