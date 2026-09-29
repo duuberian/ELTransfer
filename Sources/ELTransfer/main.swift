@@ -14,6 +14,8 @@ struct PointerPacket: Codable {
     // Optional so packets from older builds still decode.
     var color: CursorColor?
     var shape: CursorShape?
+    /// Clicks made during the session; a rise tells the receiver to play the click.
+    var clicks: Int?
     var senderID: String?
     var senderName: String?
 }
@@ -113,6 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuPanel.hide()
         refreshStatus()
         settingsWindow.show()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Never leave the real cursor frozen.
+        sender?.endSession()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -259,11 +266,18 @@ final class Sender {
     private var mouseMonitor: Any?
     private var flagMonitor: Any?
     private(set) var isSending = false
-    private var lastPoint = CGPoint.zero
+    private var eventTap: CFMachPort?
+    /// The shared pointer, in Cocoa coordinates, steered by mouse deltas while the
+    /// real cursor is held still at `frozenPoint` (CoreGraphics coordinates).
+    private var virtualPoint = CGPoint.zero
+    private var frozenPoint = CGPoint.zero
+    private var sessionFrame = CGRect.zero
+    private var clicks = 0
 
     init() {
         startDiscovery()
         installMonitors()
+        installEventTap()
         // Try to catch initial state too.
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.handleCursor()
@@ -273,6 +287,14 @@ final class Sender {
     func reinstallMonitors() {
         [mouseMonitor, flagMonitor].compactMap { $0 }.forEach(NSEvent.removeMonitor)
         installMonitors()
+        if eventTap == nil { installEventTap() }
+    }
+
+    func endSession() {
+        guard isSending else { return }
+        isSending = false
+        CGAssociateMouseAndMouseCursorPosition(1)
+        sendPosition(active: false)
     }
 
     /// Finds the receiver on the local network instead of assuming its hostname.
@@ -305,45 +327,117 @@ final class Sender {
     }
 
     private func installMonitors() {
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged]) { [weak self] event in
-            self?.handleCursor()
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return }
+            // The event tap steers and swallows events during a session; this only
+            // stands in when the tap could not be created.
+            guard isSending else { return handleCursor() }
+            guard eventTap == nil else { return }
+            if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                click()
+            } else {
+                move(dx: event.deltaX, dy: event.deltaY)
+            }
         }
         flagMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { self?.handleCursor(force: true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { self?.handleCursor() }
         }
     }
 
-    private func handleCursor(force: Bool = false) {
+    /// Sees mouse events before any app, so while sharing they steer the shared pointer
+    /// and clicks never land on whatever sits under the frozen cursor.
+    private func installEventTap() {
+        let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+                                    .otherMouseDown, .otherMouseUp, .leftMouseDragged, .rightMouseDragged,
+                                    .otherMouseDragged, .scrollWheel]
+        let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
+        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                          eventsOfInterest: mask,
+                                          callback: { _, type, event, info in
+                                              guard let info else { return Unmanaged.passUnretained(event) }
+                                              return Unmanaged<Sender>.fromOpaque(info).takeUnretainedValue()
+                                                  .handleTap(type: type, event: event)
+                                          },
+                                          userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            print("Sender event tap unavailable; clicks will reach the local Mac while sharing")
+            return
+        }
+        eventTap = tap
+        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard isSending, event.flags.contains(.maskCommand) else { return Unmanaged.passUnretained(event) }
+        switch type {
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            move(dx: event.getDoubleValueField(.mouseEventDeltaX), dy: event.getDoubleValueField(.mouseEventDeltaY))
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+            click()
+        default:
+            break
+        }
+        return nil
+    }
+
+    private func handleCursor() {
+        let command = NSEvent.modifierFlags.contains(.command)
+        if isSending {
+            // Keep the receiver fresh while the pointer rests; releasing ⌘ ends it.
+            if command { sendPosition(active: true) } else { endSession() }
+            return
+        }
+        guard command else { return }
         // Cocoa coordinates (bottom-left origin) to match NSScreen frames; the receiver
-        // flips y back for its top-left overlay. CGEvent's top-left point inverted y.
+        // flips y back for its top-left overlay.
         let point = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }) ?? NSScreen.main else { return }
         let frame = screen.frame
         let margin = CGFloat(24)
-        let left = point.x <= frame.minX + margin
-        let right = point.x >= frame.maxX - margin
-        let top = point.y >= frame.maxY - margin
-        let bottom = point.y <= frame.minY + margin
-        let atEdge = left || right || top || bottom
+        let atEdge = point.x <= frame.minX + margin || point.x >= frame.maxX - margin
+            || point.y >= frame.maxY - margin || point.y <= frame.minY + margin
+        guard atEdge else { return }
 
-        let command = NSEvent.modifierFlags.contains(.command)
+        // The edge starts a session; from here the real cursor holds still and mouse
+        // movement steers the shared pointer anywhere on the screen until ⌘ is released.
+        isSending = true
+        virtualPoint = point
+        sessionFrame = frame
+        frozenPoint = CGEvent(source: nil)?.location ?? .zero
+        CGAssociateMouseAndMouseCursorPosition(0)
+        sendPosition(active: true)
+    }
 
-        // The edge only starts a session; after that the pointer goes anywhere on the
-        // screen until ⌘ is released.
-        if command && (atEdge || isSending) {
-            isSending = true
-            lastPoint = point
-            // Normalized position captures macOS cursor acceleration and speed,
-            // then remaps it proportionally on the receiving display.
-            let nx = min(max((point.x - frame.minX) / frame.width, 0), 1)
-            let ny = min(max((point.y - frame.minY) / frame.height, 0), 1)
-            send(packet: PointerPacket(x: nx, y: ny, width: frame.width, height: frame.height, active: true))
-        } else if isSending {
-            isSending = false
-            let nx = min(max((point.x - frame.minX) / frame.width, 0), 1)
-            let ny = min(max((point.y - frame.minY) / frame.height, 0), 1)
-            send(packet: PointerPacket(x: nx, y: ny, width: frame.width, height: frame.height, active: false))
+    private func move(dx: Double, dy: Double) {
+        // Deltas grow downward; Cocoa's y grows upward.
+        virtualPoint.x = min(max(virtualPoint.x + dx, sessionFrame.minX), sessionFrame.maxX)
+        virtualPoint.y = min(max(virtualPoint.y - dy, sessionFrame.minY), sessionFrame.maxY)
+        // Should another app re-associate the mouse, put the cursor back.
+        if let location = CGEvent(source: nil)?.location, location != frozenPoint {
+            CGWarpMouseCursorPosition(frozenPoint)
+            CGAssociateMouseAndMouseCursorPosition(0)
         }
+        sendPosition(active: true)
+    }
+
+    private func click() {
+        clicks += 1
+        sendPosition(active: true)
+    }
+
+    /// Normalized, so the pointer lands proportionally on a differently sized display.
+    private func sendPosition(active: Bool) {
+        let frame = sessionFrame
+        guard frame.width > 0, frame.height > 0 else { return }
+        let nx = min(max((virtualPoint.x - frame.minX) / frame.width, 0), 1)
+        let ny = min(max((virtualPoint.y - frame.minY) / frame.height, 0), 1)
+        var packet = PointerPacket(x: nx, y: ny, width: frame.width, height: frame.height, active: active)
+        packet.clicks = clicks
+        send(packet: packet)
     }
 
     private func send(packet: PointerPacket) {
@@ -457,7 +551,28 @@ final class PointerOverlayModel: ObservableObject {
     @Published var snap = true
     /// Name of a Mac waiting for this one to hold ⌘ and accept its pointer.
     @Published var request: String?
+    @Published var ripples: [ClickRipple] = []
+    @Published var pressed = false
     let swing = PointerSwing()
+}
+
+extension PointerOverlayModel {
+    /// Plays a click: the pointer presses in and wobbles, and a ring spreads from its tip.
+    func click() {
+        let ripple = ClickRipple(point: point)
+        ripples.append(ripple)
+        pressed = true
+        swing.kick()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.pressed = false }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.ripples.removeAll { $0.id == ripple.id }
+        }
+    }
+}
+
+struct ClickRipple: Identifiable {
+    let id = UUID()
+    let point: CGPoint
 }
 
 /// Lets the pointer hang from its tip like a pendulum: moving sideways fast leaves its
@@ -492,6 +607,11 @@ final class PointerSwing {
         }
         lastPoint = point
         lastPacketTime = now
+    }
+
+    /// Knocks the pointer so it wobbles about its tip and settles back.
+    func kick() {
+        angularVelocity += angularVelocity >= 0 ? 320 : -320
     }
 
     func reset() {
@@ -534,6 +654,7 @@ final class OverlayWindow: NSWindow {
     private var applyScheduled = false
     private var inactiveSince = Date.distantPast
     private var orderOutWork: DispatchWorkItem?
+    private var lastClicks: Int?
 
     init() {
         super.init(contentRect: NSScreen.main?.frame ?? .zero,
@@ -603,6 +724,9 @@ final class OverlayWindow: NSWindow {
         if model.snap != snap { model.snap = snap }
         model.swing.record(point, snap: snap)
         if model.point != point { model.point = point }
+        // A fresh session only records the count; a rise within one plays the click.
+        if let clicks = packet.clicks, let lastClicks, clicks > lastClicks, !snap { model.click() }
+        lastClicks = packet.clicks
         let color = packet.color ?? CursorSettings.shared.color
         let shape = packet.shape ?? CursorSettings.shared.shape
         if model.color != color { model.color = color }
@@ -621,6 +745,22 @@ final class OverlayWindow: NSWindow {
         }
         orderOutWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + OverlayWindowTiming.fadeOut + 0.05, execute: work)
+    }
+}
+
+/// A ring that spreads from the pointer's tip and fades.
+struct ClickRippleView: View {
+    let color: CursorColor
+    @State private var expanded = false
+
+    var body: some View {
+        Circle()
+            .strokeBorder(color.stroke, lineWidth: 3)
+            .background(Circle().fill(color.fill.opacity(0.35)))
+            .frame(width: 46, height: 46)
+            .scaleEffect(expanded ? 1.6 : 0.3)
+            .opacity(expanded ? 0 : 0.95)
+            .onAppear { withAnimation(.easeOut(duration: 0.55)) { expanded = true } }
     }
 }
 
@@ -686,6 +826,8 @@ struct PointerView: View {
             .animation(.easeOut(duration: 0.15), value: model.color)
             .saturation(active ? 1 : 0.2)
             .shadow(color: .black.opacity(active ? 0.28 : 0.08), radius: active ? 5 : 1.5, y: active ? 2.5 : 1)
+            .scaleEffect(model.pressed ? 0.8 : 1, anchor: anchor)
+            .animation(.spring(response: 0.18, dampingFraction: 0.45), value: model.pressed)
             .scaleEffect(active ? 1 : 0.78, anchor: anchor)
             .opacity(active ? 1 : 0)
             .animation(active ? .spring(response: 0.32, dampingFraction: 0.82)
@@ -693,6 +835,13 @@ struct PointerView: View {
             .offset(x: origin.x, y: origin.y)
             .animation(model.snap ? nil : .interactiveSpring(response: 0.14, dampingFraction: 0.86), value: model.point)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay {
+                ZStack {
+                    ForEach(model.ripples) { ripple in
+                        ClickRippleView(color: model.color).position(ripple.point)
+                    }
+                }
+            }
             .overlay(alignment: .top) {
                 if let request = model.request {
                     PointerRequestBanner(name: request, color: model.color)
