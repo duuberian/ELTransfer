@@ -326,7 +326,11 @@ final class Sender {
         let bottom = point.y <= frame.minY + margin
         let atEdge = left || right || top || bottom
 
-        if atEdge && NSEvent.modifierFlags.contains(.command) {
+        let command = NSEvent.modifierFlags.contains(.command)
+
+        // The edge only starts a session; after that the pointer goes anywhere on the
+        // screen until ⌘ is released.
+        if command && (atEdge || isSending) {
             isSending = true
             lastPoint = point
             // Normalized position captures macOS cursor acceleration and speed,

@@ -3,7 +3,7 @@
 A pointer-overlay prototype for two Macs on the same local network. It never moves or controls the receiving Mac’s real cursor and cannot click, type, drag, or scroll.
 
 ## What this build does
-- Sender Mac: hold `⌘ Command` while moving the cursor to any screen edge.
+- Sender Mac: hold `⌘ Command` while moving the cursor to any screen edge to start sharing; keep holding it and the pointer follows anywhere on the screen.
 - Receiver Mac: also hold `⌘ Command` to consent to receiving the overlay pointer.
 - The receiver shows an animated blue overlay at the corresponding location.
 - The sender’s normalized cursor position is transmitted over UDP. Because positions are normalized to screen dimensions, cursor movement/sensitivity is preserved proportionally between different screen sizes.
