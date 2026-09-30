@@ -1,23 +1,24 @@
 import Foundation
 import MultipeerConnectivity
 
-/// A transport fallback for Wi-Fi networks that block client-to-client traffic.
+/// A fallback transport for Wi-Fi networks that block client-to-client traffic.
 /// Apple's peer-to-peer link can still carry packets over Bluetooth/AWDL when the
 /// router will not forward unicast UDP between two Macs.
 final class MultipeerLink: NSObject {
-    /// Kept separate from the UDP service name so one Mac never connects to itself.
+    /// Unique per launch, so a Mac cannot discover or connect to itself.
     private let peer = MCPeerID(displayName: LocalPeer.serviceName)
     private lazy var session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
-    private var connected: Set<MCPeerID> = []
     var onPacket: ((PointerPacket) -> Void)?
 
     func start() {
         guard advertiser == nil, browser == nil else { return }
 
-        // The actual Bonjour service type is `_eltransfer._tcp`; Multipeer omits the
-        // leading underscore in its API.
+        // The Bonjour service name is `_eltransfer._tcp`; Multipeer's API omits the
+        // leading underscore. Assign the delegate before either service starts.
+        session.delegate = self
+
         let advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: nil, serviceType: "eltransfer")
         advertiser.delegate = self
         advertiser.startAdvertisingPeer()
@@ -30,9 +31,10 @@ final class MultipeerLink: NSObject {
     }
 
     func send(packet: PointerPacket) {
-        guard let data = try? JSONEncoder().encode(packet), !connected.isEmpty else { return }
-        // Unreliable mode keeps pointer updates moving without building a backlog.
-        try? session.send(data, toPeers: Array(connected), with: .unreliable)
+        guard let data = try? JSONEncoder().encode(packet), !session.connectedPeers.isEmpty else { return }
+        // Reliable mode is intentional: the fallback runs at a low packet rate and
+        // must not silently drop the click counter that triggers the remote click.
+        try? session.send(data, toPeers: session.connectedPeers, with: .reliable)
     }
 }
 
@@ -44,9 +46,7 @@ extension MultipeerLink: MCNearbyServiceBrowserDelegate {
         browser.invitePeer(peerID, to: session, withContext: nil, timeout: 15)
     }
 
-    func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
-        connected.remove(peerID)
-    }
+    func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {}
 
     func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
         print("Multipeer browsing failed: \(error.localizedDescription)")
@@ -56,8 +56,6 @@ extension MultipeerLink: MCNearbyServiceBrowserDelegate {
 extension MultipeerLink: MCNearbyServiceAdvertiserDelegate {
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID,
                     withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        // The sender and receiver on the same Mac share one transport, but a peer
-        // should never be its own display name.
         invitationHandler(peerID.displayName != LocalPeer.serviceName, session)
     }
 
@@ -68,17 +66,7 @@ extension MultipeerLink: MCNearbyServiceAdvertiserDelegate {
 
 extension MultipeerLink: MCSessionDelegate {
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            switch state {
-            case .connected:
-                connected.insert(peerID)
-            case .notConnected, .connecting:
-                connected.remove(peerID)
-            @unknown default:
-                break
-            }
-        }
+        // MCSession.connectedPeers is authoritative, so no separate peer list is kept.
     }
 
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
