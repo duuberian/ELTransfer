@@ -205,8 +205,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureServices() {
         guard !isConfigured else { return }
-        sender = Sender()
-        receiver = Receiver()
+        let sender = Sender()
+        self.sender = sender
+        receiver = Receiver(multipeerLink: sender.multipeerLink)
         isConfigured = true
     }
 
@@ -273,9 +274,11 @@ final class Sender {
     private var frozenPoint = CGPoint.zero
     private var sessionFrame = CGRect.zero
     private var clicks = 0
+    let multipeerLink = MultipeerLink()
 
     init() {
         startDiscovery()
+        multipeerLink.start()
         installMonitors()
         installEventTap()
         // Try to catch initial state too.
@@ -450,6 +453,9 @@ final class Sender {
         for connection in connections where connection.state == .ready {
             connection.send(content: data, completion: .contentProcessed { _ in })
         }
+        // Some networks allow discovery but block direct UDP traffic. Apple's
+        // peer-to-peer transport is the fallback in that case.
+        multipeerLink.send(packet: packet)
     }
 }
 
@@ -462,9 +468,12 @@ final class Receiver {
     private var lastUpdate = Date.distantPast
     private var staleCheck: DispatchWorkItem?
 
-    init() {
+    init(multipeerLink: MultipeerLink) {
         installListener()
         installMonitor()
+        multipeerLink.onPacket = { [weak self] packet in
+            self?.process(packet: packet)
+        }
     }
 
     func reinstallMonitor() {
@@ -513,6 +522,10 @@ final class Receiver {
     private func process(data: Data?) {
         guard let data, let packet = try? JSONDecoder().decode(PointerPacket.self, from: data),
               packet.senderID != LocalPeer.id else { return }
+        process(packet: packet)
+    }
+
+    private func process(packet: PointerPacket) {
         DispatchQueue.main.async {
             self.lastPacket = packet
             self.lastUpdate = Date()
