@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var status: MenuStatus
     @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var receive = ReceiveSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -30,6 +31,25 @@ struct SettingsView: View {
                 Divider().overlay(ELStyle.line)
                 permissionRow("Input Monitoring", granted: status.inputMonitoringGranted,
                               pane: "Privacy_ListenEvent") { _ = CGRequestListenEventAccess() }
+            }
+
+            card {
+                sectionTitle("Receiving")
+                Picker("Let a shared pointer in", selection: $receive.mode) {
+                    ForEach(ReceiveMode.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                Text(receive.mode.explanation)
+                    .font(.system(size: 11))
+                    .foregroundStyle(ELStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().overlay(ELStyle.line)
+                sectionTitle("Sending")
+                Text("Hold ⌘ Command and push the cursor to a screen edge to share it. While sharing, press ⌘↩ to type on the other Mac: your shortcuts show there as keys, and what you type lands on its clipboard for ⌘V. ⌘Esc stops.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(ELStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             card {

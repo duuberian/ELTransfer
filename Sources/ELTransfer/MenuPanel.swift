@@ -104,7 +104,7 @@ struct MenuView: View {
                     .foregroundStyle(status.sending || status.receiving ? settings.color.stroke : ELStyle.muted)
                     .frame(width: 48, height: 40)
                     .modifier(TileStyle())
-                    .help("Sender: hold ⌘ at a screen edge. Receiver: hold ⌘ to allow the incoming pointer.")
+                    .help("Send: hold ⌘ at a screen edge, then ⌘↩ to type and ⌘Esc to stop. Receive: choose how in Settings.")
                 Button(action: openSettings) {
                     Text(status.summary)
                         .font(.system(size: 12, weight: .medium))

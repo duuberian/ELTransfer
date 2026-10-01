@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import CoreGraphics
 import Foundation
@@ -18,6 +19,15 @@ struct PointerPacket: Codable {
     var clicks: Int?
     var senderID: String?
     var senderName: String?
+    /// The sender pressed ⌘↩: its keys go to this pointer instead of its own apps.
+    var typing: Bool?
+    /// Keys held right now, modifiers first, shown as keycaps until released.
+    var keys: [String]?
+    /// Text typed in the current burst, shown as it is written.
+    var text: String?
+    /// The last finished burst; a new `clipID` tells the receiver to put it on the clipboard.
+    var clip: String?
+    var clipID: Int?
 }
 
 /// Identifies this running copy, so a Mac never discovers or draws its own pointer.
@@ -207,7 +217,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isConfigured else { return }
         let sender = Sender()
         self.sender = sender
-        receiver = Receiver(multipeerLink: sender.multipeerLink)
+        let receiver = Receiver(multipeerLink: sender.multipeerLink)
+        self.receiver = receiver
+        // A Mac showing someone else's pointer is in use; its shortcuts must not start sharing.
+        sender.canStart = { [weak receiver] in receiver?.isReceiving != true }
         isConfigured = true
     }
 
@@ -266,7 +279,15 @@ final class Sender {
     private var browser: NWBrowser?
     private var mouseMonitor: Any?
     private var flagMonitor: Any?
+    private var keyMonitor: Any?
+    /// A key was pressed during the current ⌘ hold, so it is a shortcut like ⌘T, not a share.
+    private var shortcutUsed = false
+    var canStart: () -> Bool = { true }
     private(set) var isSending = false
+    /// Latched by ⌘↩: the session no longer needs ⌘ held, and keys are relayed.
+    private(set) var isTyping = false
+    /// Set by ⌘Esc so a ⌘ still held at the edge cannot start another session at once.
+    private var waitForCommandRelease = false
     private var eventTap: CFMachPort?
     /// The shared pointer, in Cocoa coordinates, steered by mouse deltas while the
     /// real cursor is held still at `frozenPoint` (CoreGraphics coordinates).
@@ -274,6 +295,13 @@ final class Sender {
     private var frozenPoint = CGPoint.zero
     private var sessionFrame = CGRect.zero
     private var clicks = 0
+    private var heldKeys: [(code: Int, label: String)] = []
+    private var modifierFlags: CGEventFlags = []
+    private var text = ""
+    private var clip: String?
+    private var clipID = 0
+    private var textIdle: DispatchWorkItem?
+    private lazy var notice = NoticeWindow()
     let multipeerLink = MultipeerLink()
 
     init() {
@@ -288,7 +316,7 @@ final class Sender {
     }
 
     func reinstallMonitors() {
-        [mouseMonitor, flagMonitor].compactMap { $0 }.forEach(NSEvent.removeMonitor)
+        [mouseMonitor, flagMonitor, keyMonitor].compactMap { $0 }.forEach(NSEvent.removeMonitor)
         installMonitors()
         if eventTap == nil { installEventTap() }
     }
@@ -296,8 +324,13 @@ final class Sender {
     func endSession() {
         guard isSending else { return }
         isSending = false
+        isTyping = false
+        heldKeys.removeAll()
+        // Whatever was typed last still reaches the receiver's clipboard.
+        finishText()
         CGAssociateMouseAndMouseCursorPosition(1)
         sendPosition(active: false)
+        notice.hide()
     }
 
     /// Finds the receiver on the local network instead of assuming its hostname.
@@ -334,7 +367,7 @@ final class Sender {
             guard let self else { return }
             // The event tap steers and swallows events during a session; this only
             // stands in when the tap could not be created.
-            guard isSending else { return handleCursor() }
+            guard isSending else { return handleCursor(moved: event.type == .mouseMoved) }
             guard eventTap == nil else { return }
             if event.type == .leftMouseDown || event.type == .rightMouseDown {
                 click()
@@ -343,16 +376,20 @@ final class Sender {
             }
         }
         flagMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
+            if !event.modifierFlags.contains(.command) { self?.shortcutUsed = false }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { self?.handleCursor() }
+        }
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            if event.modifierFlags.contains(.command) { self?.shortcutUsed = true }
         }
     }
 
-    /// Sees mouse events before any app, so while sharing they steer the shared pointer
-    /// and clicks never land on whatever sits under the frozen cursor.
+    /// Sees mouse and key events before any app, so while sharing they steer the shared
+    /// pointer and clicks never land on whatever sits under the frozen cursor.
     private func installEventTap() {
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
                                     .otherMouseDown, .otherMouseUp, .leftMouseDragged, .rightMouseDragged,
-                                    .otherMouseDragged, .scrollWheel]
+                                    .otherMouseDragged, .scrollWheel, .keyDown, .keyUp, .flagsChanged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                           eventsOfInterest: mask,
@@ -375,7 +412,11 @@ final class Sender {
             if let eventTap { CGEvent.tapEnable(tap: eventTap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard isSending, event.flags.contains(.maskCommand) else { return Unmanaged.passUnretained(event) }
+        guard isSending else { return Unmanaged.passUnretained(event) }
+        if type == .keyDown || type == .keyUp || type == .flagsChanged {
+            return handleKey(type: type, event: event) ? nil : Unmanaged.passUnretained(event)
+        }
+        guard isTyping || event.flags.contains(.maskCommand) else { return Unmanaged.passUnretained(event) }
         switch type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
             move(dx: event.getDoubleValueField(.mouseEventDeltaX), dy: event.getDoubleValueField(.mouseEventDeltaY))
@@ -387,14 +428,106 @@ final class Sender {
         return nil
     }
 
-    private func handleCursor() {
+    /// Returns whether the key was taken from the local Mac.
+    private func handleKey(type: CGEventType, event: CGEvent) -> Bool {
+        let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let command = event.flags.contains(.maskCommand)
+        if type == .flagsChanged {
+            // Modifiers alone still reach local apps, so none think one is stuck down;
+            // here they only label the keycaps.
+            guard isTyping else { return false }
+            modifierFlags = event.flags
+            sendPosition(active: true)
+            return false
+        }
+        if type == .keyDown, command, code == kVK_Escape {
+            endSession()
+            waitForCommandRelease = true
+            return true
+        }
+        guard isTyping else {
+            guard type == .keyDown, command, code == kVK_Return || code == kVK_ANSI_KeypadEnter else { return false }
+            startTyping()
+            return true
+        }
+        if type == .keyDown {
+            keyDown(event, code: code)
+        } else {
+            heldKeys.removeAll { $0.code == code }
+        }
+        sendPosition(active: true)
+        return true
+    }
+
+    private func startTyping() {
+        isTyping = true
+        // The ⌘ from ⌘↩ is about to be released; don't show it as a keycap.
+        modifierFlags = []
+        notice.show(.typing, on: sessionFrame)
+        sendPosition(active: true)
+    }
+
+    private func keyDown(_ event: CGEvent, code: Int) {
+        modifierFlags = event.flags
+        let plainDelete = code == kVK_Delete && KeyLabel.modifiers(event.flags).isEmpty
+        if let typed = KeyLabel.typed(by: event) {
+            text += typed
+            scheduleTextEnd()
+        } else if plainDelete, !text.isEmpty {
+            text.removeLast()
+            scheduleTextEnd()
+        } else if !heldKeys.contains(where: { $0.code == code }) {
+            heldKeys.append((code, KeyLabel.name(of: event)))
+        }
+    }
+
+    /// A pause in typing ends the burst, which the receiver then copies.
+    private func scheduleTextEnd() {
+        textIdle?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, isSending else { return }
+            finishText()
+            sendPosition(active: true)
+        }
+        textIdle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+    }
+
+    private func finishText() {
+        textIdle?.cancel()
+        textIdle = nil
+        guard !text.isEmpty else { return }
+        clip = text
+        clipID += 1
+        text = ""
+    }
+
+    /// Held keys as keycaps, modifiers first. A modifier alone only shows when it
+    /// could start a shortcut, not every ⇧ used for a capital letter.
+    private var chord: [String] {
+        guard isTyping else { return [] }
+        let shortcut = modifierFlags.contains(.maskCommand) || modifierFlags.contains(.maskControl)
+        guard !heldKeys.isEmpty || shortcut else { return [] }
+        return KeyLabel.modifiers(modifierFlags) + heldKeys.map(\.label)
+    }
+
+    /// `moved` is set for plain mouse movement, the only thing that can start a session,
+    /// so pressing a shortcut while the cursor happens to rest at an edge never does.
+    private func handleCursor(moved: Bool = false) {
         let command = NSEvent.modifierFlags.contains(.command)
+        if waitForCommandRelease {
+            guard !command else { return }
+            waitForCommandRelease = false
+        }
         if isSending {
-            // Keep the receiver fresh while the pointer rests; releasing ⌘ ends it.
-            if command { sendPosition(active: true) } else { endSession() }
+            // Keep the receiver fresh while the pointer rests; releasing ⌘ ends it
+            // unless ⌘↩ latched the session.
+            if command || isTyping { sendPosition(active: true) } else { endSession() }
             return
         }
-        guard command else { return }
+        // Only ⌘ alone, held without pressing any other key, and moved into an edge shares.
+        let modifiers = NSEvent.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard moved, modifiers == .command, !shortcutUsed, canStart() else { return }
         // Cocoa coordinates (bottom-left origin) to match NSScreen frames; the receiver
         // flips y back for its top-left overlay.
         let point = NSEvent.mouseLocation
@@ -412,6 +545,7 @@ final class Sender {
         sessionFrame = frame
         frozenPoint = CGEvent(source: nil)?.location ?? .zero
         CGAssociateMouseAndMouseCursorPosition(0)
+        notice.show(.sending, on: frame)
         sendPosition(active: true)
     }
 
@@ -440,6 +574,11 @@ final class Sender {
         let ny = min(max((virtualPoint.y - frame.minY) / frame.height, 0), 1)
         var packet = PointerPacket(x: nx, y: ny, width: frame.width, height: frame.height, active: active)
         packet.clicks = clicks
+        packet.typing = isTyping
+        packet.keys = chord
+        packet.text = text
+        packet.clip = clip
+        packet.clipID = clipID
         send(packet: packet)
     }
 
@@ -463,10 +602,24 @@ final class Receiver {
     private(set) var isReceiving = false
     private var overlay: OverlayWindow?
     private var listener: NWListener?
-    private var flagMonitor: Any?
+    private var monitors: [Any] = []
     private var lastPacket = PointerPacket(x: 0.5, y: 0.5, width: 1, height: 1, active: false)
     private var lastUpdate = Date.distantPast
     private var staleCheck: DispatchWorkItem?
+    /// ⌘ is down, for the hold mode.
+    private var holding = false
+    /// A ⌘ tap let the current session in, for the toggle mode.
+    private var accepted = false
+    /// ⌘Esc turned the current session away.
+    private var dismissed = false
+    private var commandDownAt: Date?
+    private var notice: OverlayBanner?
+    private var noticeUntil = Date.distantPast
+    private var announced = false
+    private var announcedTyping = false
+    private var copiedUntil = Date.distantPast
+    private var clipSender: String?
+    private var clipID = 0
 
     init(multipeerLink: MultipeerLink) {
         installListener()
@@ -477,20 +630,76 @@ final class Receiver {
     }
 
     func reinstallMonitor() {
-        if let flagMonitor { NSEvent.removeMonitor(flagMonitor) }
+        monitors.forEach(NSEvent.removeMonitor)
+        monitors.removeAll()
         installMonitor()
     }
 
-    private func installMonitor() {
-        flagMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] _ in
-            self?.refreshConsent()
+    private var mode: ReceiveMode { ReceiveSettings.shared.mode }
+
+    private var incoming: Bool { lastPacket.active && Date().timeIntervalSince(lastUpdate) < 0.45 }
+
+    private var consents: Bool {
+        guard !dismissed else { return false }
+        switch mode {
+        case .automatic: return true
+        case .toggle: return accepted
+        case .hold: return holding
         }
     }
 
-    private func refreshConsent() {
-        // User consent gesture: receiver also holds Command.
-        isReceiving = NSEvent.modifierFlags.contains(.command)
+    private func installMonitor() {
+        let events: NSEvent.EventTypeMask = [.flagsChanged, .keyDown, .leftMouseDown, .rightMouseDown]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: events, handler: { [weak self] in self?.handle($0) }) {
+            monitors.append(global)
+        }
+        // Global monitors skip ELTransfer's own windows, such as Settings.
+        if let local = NSEvent.addLocalMonitorForEvents(matching: events, handler: { [weak self] event in
+            self?.handle(event)
+            return event
+        }) { monitors.append(local) }
+    }
+
+    private func handle(_ event: NSEvent) {
+        switch event.type {
+        case .flagsChanged:
+            let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            holding = flags.contains(.command)
+            let commandKey = Int(event.keyCode) == kVK_Command || Int(event.keyCode) == kVK_RightCommand
+            if flags == .command, commandKey {
+                commandDownAt = Date()
+            } else if flags.isEmpty, let down = commandDownAt, Date().timeIntervalSince(down) < 0.4 {
+                commandDownAt = nil
+                tapCommand()
+            } else {
+                commandDownAt = nil
+            }
+        case .keyDown:
+            // A ⌘ shortcut is not a tap.
+            commandDownAt = nil
+            guard Int(event.keyCode) == kVK_Escape, event.modifierFlags.contains(.command) else { return }
+            escape()
+        default:
+            commandDownAt = nil
+            return
+        }
         updateOverlay()
+    }
+
+    private func tapCommand() {
+        guard mode == .toggle else { return }
+        if accepted {
+            accepted = false
+        } else if incoming {
+            accepted = true
+            dismissed = false
+        }
+    }
+
+    private func escape() {
+        guard incoming else { return }
+        dismissed = true
+        accepted = false
     }
 
     private func installListener() {
@@ -527,8 +736,12 @@ final class Receiver {
 
     private func process(packet: PointerPacket) {
         DispatchQueue.main.async {
+            // A long silence means the last session ended without its final packet.
+            if Date().timeIntervalSince(self.lastUpdate) > 3 { self.resetSession() }
             self.lastPacket = packet
             self.lastUpdate = Date()
+            self.takeClip(from: packet)
+            if !packet.active { self.resetSession() }
             self.updateOverlay()
             // Re-check once the packet goes stale so the pointer fades if the stream stops.
             self.staleCheck?.cancel()
@@ -538,16 +751,67 @@ final class Receiver {
         }
     }
 
+    private func resetSession() {
+        accepted = false
+        dismissed = false
+        announced = false
+        announcedTyping = false
+        notice = nil
+    }
+
+    /// Puts a finished burst of the sender's typing on the clipboard, once, so ⌘V pastes it.
+    private func takeClip(from packet: PointerPacket) {
+        let id = packet.clipID ?? 0
+        // A sender seen for the first time may still carry text from long ago.
+        guard packet.senderID == clipSender else {
+            clipSender = packet.senderID
+            clipID = id
+            return
+        }
+        guard id > clipID else { return }
+        clipID = id
+        guard consents, let clip = packet.clip, !clip.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(clip, forType: .string)
+        copiedUntil = Date().addingTimeInterval(3)
+        refresh(after: 3)
+    }
+
+    private func announce(_ banner: OverlayBanner) {
+        notice = banner
+        noticeUntil = Date().addingTimeInterval(3)
+        refresh(after: 3)
+    }
+
+    private func refresh(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.05) { [weak self] in self?.updateOverlay() }
+    }
+
     private func updateOverlay() {
-        let incoming = lastPacket.active && Date().timeIntervalSince(lastUpdate) < 0.45
-        let active = isReceiving && incoming
-        // A Mac is pushing its pointer but this one has not held ⌘ yet: ask.
-        let request = incoming && !isReceiving ? (lastPacket.senderName ?? "A Mac") : nil
+        let incoming = self.incoming
+        let active = consents && incoming
+        isReceiving = active
+        let name = lastPacket.senderName ?? "A Mac"
+        if active, !announced {
+            announced = true
+            announce(.receiving(from: name, mode: mode))
+        }
+        if active, lastPacket.typing == true, !announcedTyping {
+            announcedTyping = true
+            announce(.typing(from: name))
+        }
+        let now = Date()
+        var banner = active && now < noticeUntil ? notice : nil
+        // A Mac is pushing its pointer but this one has not let it in yet: ask.
+        if incoming, !consents, !dismissed, mode != .automatic {
+            banner = .request(from: name, mode: mode)
+        }
+        let copied = now < copiedUntil
         if overlay == nil {
-            guard active || request != nil else { return }
+            guard active || banner != nil || copied else { return }
             overlay = OverlayWindow()
         }
-        overlay?.show(packet: lastPacket, active: active, request: request)
+        overlay?.show(packet: lastPacket, active: active, banner: banner, copied: copied)
     }
 }
 
@@ -562,8 +826,13 @@ final class PointerOverlayModel: ObservableObject {
     /// Set for the update that places a pointer reappearing after its fade-out, so it
     /// settles in place instead of gliding over from where it vanished.
     @Published var snap = true
-    /// Name of a Mac waiting for this one to hold ⌘ and accept its pointer.
-    @Published var request: String?
+    /// A request to let a pointer in, or a short notice about the session.
+    @Published var banner: OverlayBanner?
+    /// The sender's held keys, and the text it is typing.
+    @Published var keys: [String] = []
+    @Published var text = ""
+    /// The sender's typing was just put on this Mac's clipboard.
+    @Published var copied = false
     @Published var ripples: [ClickRipple] = []
     @Published var pressed = false
     let swing = PointerSwing()
@@ -663,11 +932,13 @@ enum OverlayWindowTiming {
 /// A click-through, screen-sized overlay that hosts the remote pointer.
 final class OverlayWindow: NSWindow {
     private let model = PointerOverlayModel()
-    private var target: (packet: PointerPacket, active: Bool, request: String?)?
+    private var target: (packet: PointerPacket, active: Bool, banner: OverlayBanner?, copied: Bool)?
     private var applyScheduled = false
     private var inactiveSince = Date.distantPast
     private var orderOutWork: DispatchWorkItem?
     private var lastClicks: Int?
+    private var keysShownAt = Date.distantPast
+    private var keysClear: DispatchWorkItem?
 
     init() {
         super.init(contentRect: NSScreen.main?.frame ?? .zero,
@@ -684,9 +955,9 @@ final class OverlayWindow: NSWindow {
         contentView = host
     }
 
-    func show(packet: PointerPacket, active: Bool, request: String?) {
-        target = (packet, active, request)
-        if (active || request != nil) && !isVisible {
+    func show(packet: PointerPacket, active: Bool, banner: OverlayBanner?, copied: Bool) {
+        target = (packet, active, banner, copied)
+        if (active || banner != nil || copied) && !isVisible {
             // Put the faded-out view on screen first so the entrance animates from it.
             orderFrontRegardless()
             guard !applyScheduled else { return }
@@ -701,12 +972,19 @@ final class OverlayWindow: NSWindow {
     }
 
     private func applyTarget() {
-        guard let (packet, active, request) = target, let screen = NSScreen.main else { return }
+        guard let (packet, active, banner, copied) = target, let screen = NSScreen.main else { return }
         let wasActive = model.active
-        if model.request != request {
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) { model.request = request }
+        let spring = Animation.spring(response: 0.32, dampingFraction: 0.82)
+        if model.banner != banner { withAnimation(spring) { model.banner = banner } }
+        if model.copied != copied { withAnimation(spring) { model.copied = copied } }
+        let text = active ? packet.text ?? "" : ""
+        if model.text != text {
+            // Appearing and vanishing spring; each new letter only resizes quickly.
+            withAnimation(model.text.isEmpty || text.isEmpty ? spring : .easeOut(duration: 0.1)) { model.text = text }
         }
-        if request != nil {
+        setKeys(active ? packet.keys ?? [] : [])
+        let lingering = banner != nil || copied
+        if lingering {
             orderOutWork?.cancel()
             orderOutWork = nil
             if frame != screen.frame { setFrame(screen.frame, display: false) }
@@ -714,13 +992,13 @@ final class OverlayWindow: NSWindow {
         }
         guard active else {
             if !wasActive {
-                if request == nil { scheduleOrderOut() }
+                if !lingering { scheduleOrderOut() }
                 return
             }
             // Keep the last position and let the view fade; order out once it is invisible.
             model.active = false
             inactiveSince = Date()
-            if request == nil { scheduleOrderOut() }
+            if !lingering { scheduleOrderOut() }
             return
         }
 
@@ -747,13 +1025,31 @@ final class OverlayWindow: NSWindow {
         if !wasActive { model.active = true }
     }
 
-    /// Orders the window out once the pointer and any request have faded.
+    /// Keys vanish on release, but a quick tap stays up long enough to be read.
+    private func setKeys(_ keys: [String]) {
+        keysClear?.cancel()
+        keysClear = nil
+        let remaining = 0.4 - Date().timeIntervalSince(keysShownAt)
+        if keys.isEmpty, !model.keys.isEmpty, remaining > 0 {
+            let work = DispatchWorkItem { [weak self] in
+                withAnimation(.easeOut(duration: 0.15)) { self?.model.keys = [] }
+            }
+            keysClear = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: work)
+            return
+        }
+        guard model.keys != keys else { return }
+        if !keys.isEmpty { keysShownAt = Date() }
+        withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) { model.keys = keys }
+    }
+
+    /// Orders the window out once the pointer and any banner have faded.
     private func scheduleOrderOut() {
         guard isVisible, orderOutWork == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             orderOutWork = nil
-            guard !model.active, model.request == nil else { return }
+            guard !model.active, model.banner == nil, !model.copied else { return }
             orderOut(nil)
         }
         orderOutWork = work
@@ -774,33 +1070,6 @@ struct ClickRippleView: View {
             .scaleEffect(expanded ? 1.6 : 0.3)
             .opacity(expanded ? 0 : 0.95)
             .onAppear { withAnimation(.easeOut(duration: 0.55)) { expanded = true } }
-    }
-}
-
-/// Asks the person at this Mac to hold ⌘ to let another Mac's pointer in.
-struct PointerRequestBanner: View {
-    let name: String
-    let color: CursorColor
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "cursorarrow.rays")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(color.stroke)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(name) wants to share its pointer")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("Hold ⌘ Command to let it in")
-                    .font(.system(size: 12))
-                    .foregroundStyle(ELStyle.muted)
-            }
-        }
-        .foregroundStyle(ELStyle.ink)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(ELStyle.surface, in: Capsule())
-        .overlay(Capsule().strokeBorder(ELStyle.line))
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
     }
 }
 
@@ -856,11 +1125,29 @@ struct PointerView: View {
                 }
             }
             .overlay(alignment: .top) {
-                if let request = model.request {
-                    PointerRequestBanner(name: request, color: model.color)
+                if let banner = model.banner {
+                    NoticeBanner(banner: banner, color: model.color)
                         .padding(.top, 48)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
+            }
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 14) {
+                    if !model.text.isEmpty {
+                        TypedTextBubble(text: model.text, color: model.color)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    if !model.keys.isEmpty {
+                        KeycapRow(keys: model.keys)
+                            .transition(.scale(scale: 0.85).combined(with: .opacity))
+                    }
+                    if model.copied {
+                        NoticeBanner(banner: .copied, color: model.color)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .padding(.horizontal, 40)
+                .padding(.bottom, 72)
             }
             .allowsHitTesting(false)
     }
